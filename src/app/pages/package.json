@@ -1,0 +1,9 @@
+{
+  "name": "hs-uix-demos-pages",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@hubspot/ui-extensions": "^0.14.0",
+    "hs-uix": "^2.1.0"
+  }
+}

@@ -1,0 +1,7 @@
+node_modules
+.hs
+.env
+src/app/dist
+
+.claude/
+vendor/

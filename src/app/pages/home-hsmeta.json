@@ -1,0 +1,8 @@
+{
+  "uid": "hs-uix-demos-home",
+  "type": "page",
+  "config": {
+    "entrypoint": "/app/pages/Home.jsx",
+    "location": "home"
+  }
+}

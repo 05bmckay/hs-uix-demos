@@ -1,0 +1,23 @@
+{
+  "uid": "hs-uix-demos-app",
+  "type": "app",
+  "config": {
+    "name": "hs-uix Component Demos",
+    "description": "Interactive demos for hs-uix component packages: DataTable, FormBuilder, and more",
+    "distribution": "private",
+    "auth": {
+      "type": "static",
+      "requiredScopes": [
+        "oauth",
+        "crm.objects.contacts.read",
+        "crm.objects.companies.read",
+        "crm.objects.deals.read"
+      ]
+    },
+    "permittedUrls": {
+      "fetch": ["https://webhook.site"],
+      "iframe": ["https://hs-uix-iframe.05bmckay.workers.dev"],
+      "img": []
+    }
+  }
+}
