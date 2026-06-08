@@ -667,6 +667,20 @@ const FetchHubSpotApiProbe = ({ log }) => {
         </Button>
       </Flex>
       <JsonPanel title="Response / error" data={result || { note: "No request sent yet" }} />
+      {result?.ok &&
+        result.status >= 200 &&
+        result.status < 300 &&
+        result.bodyType === "null" && (
+          <Alert variant="warning" title="Status only — no response body">
+            The call reached HubSpot and returned {result.status} (so auth +
+            scopes work), but this SDK build surfaces only the status line —
+            headers and body come back empty/null even with an Accept header.
+            Confirmed limitation of the experimental client at platformVersion
+            2026.03 / @hubspot/ui-extensions 0.14.2. Use it to check status/side
+            effects; for response data you still need a serverless function or
+            hubspot.fetch.
+          </Alert>
+        )}
     </Flex>
   );
 };
@@ -746,7 +760,7 @@ const PROBES = [
     group: "Live fetch",
     name: "fetchHubSpotApi (experimental REST API client)",
     note:
-      "New in 0.13.2, from @hubspot/ui-extensions/experimental/api-client. Authenticated proxy to HubSpot's own API straight from the card — relative path, app-scoped auth, no serverless function and no permittedUrls. Includes typed validation errors (InvalidApiPathError, etc.) — try the 'Bad path' preset.",
+      "New in 0.13.2, from @hubspot/ui-extensions/experimental/api-client. Authenticated proxy to HubSpot's own API straight from the card — relative path, app-scoped auth, no serverless function and no permittedUrls. KNOWN LIMITATION (0.14.2): returns the status line only — response headers/body come back empty/null, so it's status/side-effect only for now. Typed validation errors (InvalidApiPathError, etc.) work — try the 'Bad path' preset.",
     available: () => typeof fetchHubSpotApi === "function",
     render: (log) => <FetchHubSpotApiProbe log={log} />,
   },
