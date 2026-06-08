@@ -582,7 +582,9 @@ const FetchHubSpotApiProbe = ({ log }) => {
   const send = async () => {
     setBusy(true);
     setResult(null);
-    const request = { path, method };
+    // Default an Accept header — testing whether the client only serializes the
+    // response body back across the worker boundary on explicit content negotiation.
+    const request = { path, method, headers: { Accept: "application/json" } };
     if (method !== "GET" && bodyText.trim()) {
       try {
         request.body = JSON.parse(bodyText);
@@ -595,8 +597,21 @@ const FetchHubSpotApiProbe = ({ log }) => {
     }
     try {
       const res = await fetchHubSpotApi(request);
-      setResult({ ok: true, status: res.status, headers: res.headers, body: res.body });
-      log(`fetchHubSpotApi ${method} ${path} -> ${res.status}`);
+      // typeof null === "object", so distinguish null explicitly; dump all keys
+      // in case the body is delivered under a different/non-obvious field.
+      setResult({
+        ok: true,
+        status: res?.status,
+        headers: res?.headers,
+        responseKeys: res && typeof res === "object" ? Object.keys(res) : null,
+        bodyType: res?.body === null ? "null" : typeof res?.body,
+        body: res?.body,
+      });
+      log(
+        `fetchHubSpotApi ${method} ${path} -> ${res?.status} (body ${
+          res?.body === null ? "null" : typeof res?.body
+        })`
+      );
     } catch (error) {
       // Validation errors set error.name (InvalidApiPathError, etc.); API/network
       // failures surface here too. Show the class name to prove the typed errors.
