@@ -395,7 +395,7 @@ const FileInputProbe = ({ log }) => {
 // onChange. Passing attachToRecord (a CrmRecord = { objectTypeId, objectId })
 // also drops the file onto that record's activity timeline. We feed the returned
 // id straight into FileViewer below to prove the round-trip.
-const FileUploadProbe = ({ log }) => {
+const FileUploadProbe = ({ log, onUploaded }) => {
   const ctx = useExtensionContext();
   const crmRecord = ctx?.crm?.objectId
     ? { objectTypeId: ctx.crm.objectTypeId, objectId: ctx.crm.objectId }
@@ -407,6 +407,9 @@ const FileUploadProbe = ({ log }) => {
   const handleChange = (file) => {
     setUploaded(file);
     if (!file) setViewing(false);
+    // Share the real id with the standalone FileViewer probe so it can be
+    // tested without hand-typing a (likely non-existent) id.
+    if (file && onUploaded) onUploaded(file);
     log(`FileUpload.onChange ${file ? `#${file.id} ${file.name}` : "(cleared)"}`);
   };
 
@@ -475,16 +478,29 @@ const FileUploadProbe = ({ log }) => {
 // FileViewer renders an existing File Manager asset by numeric id — no upload,
 // no picker. This probe lets you punch in any file id to confirm what the host
 // renders (inline preview vs. download chip) for different file types.
-const FileViewerProbe = ({ log }) => {
+const FileViewerProbe = ({ log, lastUpload }) => {
   const [draftId, setDraftId] = useState(null);
   const [fileId, setFileId] = useState(null);
 
   return (
     <Flex direction="column" gap="sm">
       <Text variant="microcopy">
-        Enter a numeric File Manager id (e.g. one returned by the FileUpload
-        probe) and render it. The host decides the presentation per file type.
+        Renders a File Manager asset by id. The id must be a real file in this
+        portal — a made-up number renders nothing. Easiest test: upload via the
+        FileUpload probe first, then use its id here.
       </Text>
+      {lastUpload && (
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setDraftId(lastUpload.id);
+            setFileId(lastUpload.id);
+            log(`FileViewer.render (last upload) #${lastUpload.id}`);
+          }}
+        >
+          Use last uploaded #{lastUpload.id} ({lastUpload.name})
+        </Button>
+      )}
       <Flex direction="row" gap="xs" align="end">
         <NumberInput
           label="File id"
@@ -508,7 +524,7 @@ const FileViewerProbe = ({ log }) => {
           <FileViewer fileId={fileId} />
         </Tile>
       ) : (
-        <JsonPanel title="FileViewer" data={{ note: "Enter an id and click Render" }} />
+        <JsonPanel title="FileViewer" data={{ note: "Enter a real file id and click Render" }} />
       )}
     </Flex>
   );
@@ -600,7 +616,9 @@ const PROBES = [
     note:
       "The uploading sibling of FileInput. Pushes the file to the File Manager and returns an UploadedFile on onChange; optional attachToRecord pins it to the record timeline. The returned id is fed into FileViewer to confirm the round-trip.",
     available: () => Boolean(FileUpload && FileViewer),
-    render: (log) => <FileUploadProbe log={log} />,
+    render: (log, shared) => (
+      <FileUploadProbe log={log} onUploaded={shared?.setLastUpload} />
+    ),
   },
   {
     id: "file-viewer",
@@ -609,7 +627,9 @@ const PROBES = [
     note:
       "Renders a File Manager asset by numeric id — no picker, no upload. Punch in any file id (or reuse one from FileUpload) to see how the host presents different file types.",
     available: () => Boolean(FileViewer),
-    render: (log) => <FileViewerProbe log={log} />,
+    render: (log, shared) => (
+      <FileViewerProbe log={log} lastUpload={shared?.lastUpload} />
+    ),
   },
   {
     id: "iframe",
@@ -1273,6 +1293,10 @@ const ProbeMatrixDemo = () => {
   const [mounted, setMounted] = useState({});
   const [results, setResults] = useState({});
   const [events, setEvents] = useState([]);
+  // Shared across probe cards: the last file uploaded via the FileUpload probe,
+  // so the standalone FileViewer probe can render a real id. Lives here (not in
+  // a probe) so it survives individual cards mounting/unmounting.
+  const [lastUpload, setLastUpload] = useState(null);
 
   const logEvent = (message) =>
     setEvents((existing) =>
@@ -1355,7 +1379,7 @@ const ProbeMatrixDemo = () => {
                             )
                           }
                         >
-                          {probe.render(logEvent)}
+                          {probe.render(logEvent, { lastUpload, setLastUpload })}
                         </ProbeErrorBoundary>
                         <Flex direction="row" gap="xs">
                           <Button
