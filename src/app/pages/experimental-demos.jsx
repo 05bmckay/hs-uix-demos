@@ -6,11 +6,14 @@ import {
   Divider,
   Flex,
   Heading,
+  Input,
   NumberInput,
+  Select,
   Tab,
   Tabs,
   Tag,
   Text,
+  TextArea,
   Tile,
   hubspot,
   useExtensionContext,
@@ -35,6 +38,7 @@ import {
   Select as XpSelect,
   Toggle as XpToggle,
 } from "@hubspot/ui-extensions/experimental";
+import { fetchHubSpotApi } from "@hubspot/ui-extensions/experimental/api-client";
 import {
   PageBreadcrumbs,
   PageLink,
@@ -530,6 +534,128 @@ const FileViewerProbe = ({ log, lastUpload }) => {
   );
 };
 
+// fetchHubSpotApi (new in 0.13.2, from @hubspot/ui-extensions/experimental/
+// api-client) is an authenticated proxy to HubSpot's OWN REST API — relative
+// path, rides the app's auth/scopes, no serverless function and no
+// permittedUrls entry. Unlike hubspot.fetch (arbitrary external URLs, only the
+// Authorization header allowed), this only hits HubSpot endpoints but handles
+// auth for you and validates the request shape with typed errors.
+const HS_API_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"].map((m) => ({
+  label: m,
+  value: m,
+}));
+
+const HS_API_PRESETS = [
+  { label: "Account details", method: "GET", path: "/account-info/v3/details", body: "" },
+  {
+    label: "Contacts (3)",
+    method: "GET",
+    path: "/crm/v3/objects/contacts?limit=3&properties=email,firstname,lastname",
+    body: "",
+  },
+  {
+    label: "Contact search (POST)",
+    method: "POST",
+    path: "/crm/v3/objects/contacts/search",
+    body: '{\n  "limit": 3,\n  "sorts": [{ "propertyName": "createdate", "direction": "DESCENDING" }]\n}',
+  },
+  // Path with no leading slash trips the client-side validator before any
+  // network call, surfacing a typed InvalidApiPathError.
+  { label: "Bad path → typed error", method: "GET", path: "account-info/v3/details", body: "" },
+];
+
+const FetchHubSpotApiProbe = ({ log }) => {
+  const [method, setMethod] = useState("GET");
+  const [path, setPath] = useState("/account-info/v3/details");
+  const [bodyText, setBodyText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const applyPreset = (preset) => {
+    setMethod(preset.method);
+    setPath(preset.path);
+    setBodyText(preset.body);
+    setResult(null);
+    log(`fetchHubSpotApi preset: ${preset.label}`);
+  };
+
+  const send = async () => {
+    setBusy(true);
+    setResult(null);
+    const request = { path, method };
+    if (method !== "GET" && bodyText.trim()) {
+      try {
+        request.body = JSON.parse(bodyText);
+        request.contentType = "application/json";
+      } catch (error) {
+        setResult({ ok: false, kind: "client", error: `Body is not valid JSON: ${error.message}` });
+        setBusy(false);
+        return;
+      }
+    }
+    try {
+      const res = await fetchHubSpotApi(request);
+      setResult({ ok: true, status: res.status, headers: res.headers, body: res.body });
+      log(`fetchHubSpotApi ${method} ${path} -> ${res.status}`);
+    } catch (error) {
+      // Validation errors set error.name (InvalidApiPathError, etc.); API/network
+      // failures surface here too. Show the class name to prove the typed errors.
+      setResult({
+        ok: false,
+        kind: "thrown",
+        errorName: error?.name || "Error",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      log(`fetchHubSpotApi error [${error?.name}]: ${error?.message || error}`);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Flex direction="column" gap="sm">
+      <Text variant="microcopy">
+        Authenticated proxy to HubSpot's own REST API — no serverless function,
+        no permittedUrls. The path must start with "/" and uses the app's
+        scopes. Body applies to non-GET requests.
+      </Text>
+      <Flex direction="row" gap="xs">
+        {HS_API_PRESETS.map((preset) => (
+          <Button key={preset.label} variant="secondary" onClick={() => applyPreset(preset)}>
+            {preset.label}
+          </Button>
+        ))}
+      </Flex>
+      <Select
+        label="Method"
+        name="hs-api-method"
+        value={method}
+        options={HS_API_METHODS}
+        onChange={(value) => setMethod(value)}
+      />
+      <Input
+        label="Path"
+        name="hs-api-path"
+        value={path}
+        onChange={(value) => setPath(value)}
+      />
+      {method !== "GET" && (
+        <TextArea
+          label="Body (JSON)"
+          name="hs-api-body"
+          value={bodyText}
+          onChange={(value) => setBodyText(value)}
+        />
+      )}
+      <Flex direction="row" gap="xs">
+        <Button variant="primary" disabled={busy || !path} onClick={send}>
+          {busy ? "Sending…" : `Send ${method}`}
+        </Button>
+      </Flex>
+      <JsonPanel title="Response / error" data={result || { note: "No request sent yet" }} />
+    </Flex>
+  );
+};
+
 const PROBES = [
   {
     id: "header-actions",
@@ -599,6 +725,15 @@ const PROBES = [
       "Live outbound test: POSTs to a permitted webhook.site URL, and ships a selected file's real bytes (File.arrayBuffer) out. Watch the webhook dashboard.",
     available: () => typeof hubspot?.fetch === "function",
     render: (log) => <FetchProbe log={log} />,
+  },
+  {
+    id: "fetch-hubspot-api",
+    group: "Live fetch",
+    name: "fetchHubSpotApi (experimental REST API client)",
+    note:
+      "New in 0.13.2, from @hubspot/ui-extensions/experimental/api-client. Authenticated proxy to HubSpot's own API straight from the card — relative path, app-scoped auth, no serverless function and no permittedUrls. Includes typed validation errors (InvalidApiPathError, etc.) — try the 'Bad path' preset.",
+    available: () => typeof fetchHubSpotApi === "function",
+    render: (log) => <FetchHubSpotApiProbe log={log} />,
   },
   {
     id: "file-input",
@@ -1459,7 +1594,7 @@ export const EXPERIMENTAL_DEMOS = [
     id: "exp-render-probe",
     name: "Host Component Render Probe",
     description:
-      "Mounts host-known-but-unexported components (app-home header actions, page chrome, experimental Iframe/Popover/FileInput/FileUpload/FileViewer, experimental primitives) one at a time and records what actually renders at this extension point.",
+      "Mounts host-known-but-unexported components (app-home header actions, page chrome, experimental Iframe/Popover/FileInput/FileUpload/FileViewer, experimental primitives) and live data probes (hubspot.fetch, fetchHubSpotApi REST client) one at a time, recording what actually renders/works at this extension point.",
     package: "experimental",
     Component: ProbeMatrixDemo,
     githubUrl: EXPERIMENTAL_DOCS,
