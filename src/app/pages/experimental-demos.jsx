@@ -6,6 +6,7 @@ import {
   Divider,
   Flex,
   Heading,
+  NumberInput,
   Tab,
   Tabs,
   Tag,
@@ -18,6 +19,8 @@ import {
   Center,
   ExpandableText,
   FileInput,
+  FileUpload,
+  FileViewer,
   Grid,
   GridItem,
   Iframe,
@@ -387,6 +390,130 @@ const FileInputProbe = ({ log }) => {
   );
 };
 
+// FileUpload is the higher-level sibling of FileInput: it actually uploads to
+// HubSpot's File Manager and hands back an UploadedFile ({ id, name, url }) via
+// onChange. Passing attachToRecord (a CrmRecord = { objectTypeId, objectId })
+// also drops the file onto that record's activity timeline. We feed the returned
+// id straight into FileViewer below to prove the round-trip.
+const FileUploadProbe = ({ log }) => {
+  const ctx = useExtensionContext();
+  const crmRecord = ctx?.crm?.objectId
+    ? { objectTypeId: ctx.crm.objectTypeId, objectId: ctx.crm.objectId }
+    : null;
+  const [uploaded, setUploaded] = useState(null);
+  const [attach, setAttach] = useState(false);
+  const [viewing, setViewing] = useState(false);
+
+  const handleChange = (file) => {
+    setUploaded(file);
+    if (!file) setViewing(false);
+    log(`FileUpload.onChange ${file ? `#${file.id} ${file.name}` : "(cleared)"}`);
+  };
+
+  return (
+    <Flex direction="column" gap="sm">
+      <Text variant="microcopy">
+        Unlike FileInput, this uploads to the File Manager and returns
+        {" "}
+        <Text format={{ fontWeight: "demibold" }}>{"{ id, name, url }"}</Text> on
+        completion. Toggle attach-to-record to also pin it to this record's
+        timeline (needs a CRM record context).
+      </Text>
+      <Flex direction="row" gap="xs" align="center">
+        <Button
+          variant="secondary"
+          disabled={!crmRecord}
+          onClick={() => {
+            setAttach((prev) => !prev);
+            log(`FileUpload.attachToRecord ${!attach ? "on" : "off"}`);
+          }}
+        >
+          {attach ? "Attach to record: ON" : "Attach to record: OFF"}
+        </Button>
+        <Text variant="microcopy">
+          {crmRecord
+            ? `${crmRecord.objectTypeId} / ${crmRecord.objectId}`
+            : "No CRM record context here"}
+        </Text>
+      </Flex>
+      <FileUpload
+        value={uploaded || undefined}
+        onChange={handleChange}
+        attachToRecord={attach && crmRecord ? crmRecord : undefined}
+      />
+      <JsonPanel
+        title="UploadedFile (onChange payload)"
+        data={uploaded || { note: "No file uploaded yet" }}
+      />
+      {uploaded && (
+        <Flex direction="column" gap="xs">
+          <Flex direction="row" gap="xs">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setViewing((prev) => !prev);
+                log(`FileViewer ${!viewing ? "show" : "hide"} #${uploaded.id}`);
+              }}
+            >
+              {viewing ? "Hide in FileViewer" : `View #${uploaded.id} in FileViewer`}
+            </Button>
+            <Button variant="secondary" onClick={() => handleChange(null)}>
+              Clear
+            </Button>
+          </Flex>
+          {viewing && (
+            <Tile>
+              <FileViewer fileId={uploaded.id} />
+            </Tile>
+          )}
+        </Flex>
+      )}
+    </Flex>
+  );
+};
+
+// FileViewer renders an existing File Manager asset by numeric id — no upload,
+// no picker. This probe lets you punch in any file id to confirm what the host
+// renders (inline preview vs. download chip) for different file types.
+const FileViewerProbe = ({ log }) => {
+  const [draftId, setDraftId] = useState(null);
+  const [fileId, setFileId] = useState(null);
+
+  return (
+    <Flex direction="column" gap="sm">
+      <Text variant="microcopy">
+        Enter a numeric File Manager id (e.g. one returned by the FileUpload
+        probe) and render it. The host decides the presentation per file type.
+      </Text>
+      <Flex direction="row" gap="xs" align="end">
+        <NumberInput
+          label="File id"
+          name="file-viewer-id"
+          value={draftId ?? undefined}
+          onChange={(value) => setDraftId(value)}
+        />
+        <Button
+          variant="primary"
+          disabled={!Number.isFinite(draftId)}
+          onClick={() => {
+            setFileId(draftId);
+            log(`FileViewer.render #${draftId}`);
+          }}
+        >
+          Render
+        </Button>
+      </Flex>
+      {fileId !== null && Number.isFinite(fileId) ? (
+        <Tile>
+          <FileViewer fileId={fileId} />
+        </Tile>
+      ) : (
+        <JsonPanel title="FileViewer" data={{ note: "Enter an id and click Render" }} />
+      )}
+    </Flex>
+  );
+};
+
 const PROBES = [
   {
     id: "header-actions",
@@ -465,6 +592,24 @@ const PROBES = [
       "Captures a file selection only; no upload happens. This probe logs the exact onChange payload so we can see whether file bytes survive the worker boundary or degrade to {name}.",
     available: () => Boolean(FileInput),
     render: (log) => <FileInputProbe log={log} />,
+  },
+  {
+    id: "file-upload",
+    group: "Experimental",
+    name: "FileUpload (uploads + returns { id, name, url })",
+    note:
+      "The uploading sibling of FileInput. Pushes the file to the File Manager and returns an UploadedFile on onChange; optional attachToRecord pins it to the record timeline. The returned id is fed into FileViewer to confirm the round-trip.",
+    available: () => Boolean(FileUpload && FileViewer),
+    render: (log) => <FileUploadProbe log={log} />,
+  },
+  {
+    id: "file-viewer",
+    group: "Experimental",
+    name: "FileViewer (renders an existing file by id)",
+    note:
+      "Renders a File Manager asset by numeric id — no picker, no upload. Punch in any file id (or reuse one from FileUpload) to see how the host presents different file types.",
+    available: () => Boolean(FileViewer),
+    render: (log) => <FileViewerProbe log={log} />,
   },
   {
     id: "iframe",
@@ -1290,7 +1435,7 @@ export const EXPERIMENTAL_DEMOS = [
     id: "exp-render-probe",
     name: "Host Component Render Probe",
     description:
-      "Mounts host-known-but-unexported components (app-home header actions, page chrome, experimental Iframe/Popover/FileInput, experimental primitives) one at a time and records what actually renders at this extension point.",
+      "Mounts host-known-but-unexported components (app-home header actions, page chrome, experimental Iframe/Popover/FileInput/FileUpload/FileViewer, experimental primitives) one at a time and records what actually renders at this extension point.",
     package: "experimental",
     Component: ProbeMatrixDemo,
     githubUrl: EXPERIMENTAL_DOCS,

@@ -1,5 +1,18 @@
-import React from "react";
+import React, { useCallback, useMemo, useState } from "react";
+import {
+  Button,
+  Flex,
+  NumberInput,
+  Panel,
+  PanelBody,
+  PanelFooter,
+  PanelSection,
+  Select,
+  Text,
+  ToggleGroup,
+} from "@hubspot/ui-extensions";
 import { Calendar } from "hs-uix";
+import { useDemoHeaderSlot } from "./demoHeader.jsx";
 
 const CALENDAR_DOCS = "https://github.com/05bmckay/hs-uix/blob/main/packages/calendar/README.md";
 
@@ -137,6 +150,216 @@ const MEETING_TYPE_FILTER = {
 };
 
 // ---------------------------------------------------------------------------
+// Interactive Calendar Playground — flagship demo with a "Customize" drawer
+// ---------------------------------------------------------------------------
+
+const CALENDAR_DATASETS = {
+  deals: {
+    events: DEALS,
+    eventFields: DEAL_CALENDAR_FIELDS,
+    searchFields: ["name", "owner", "stage"],
+    filters: [STAGE_FILTER],
+  },
+  meetings: {
+    events: MEETINGS,
+    eventFields: MEETING_FIELDS,
+    searchFields: ["title", "owner", "type"],
+    filters: [MEETING_TYPE_FILTER],
+  },
+};
+
+const DATASET_OPTIONS = [
+  { label: "Deal close dates", value: "deals" },
+  { label: "Meeting schedule", value: "meetings" },
+];
+
+const VIEW_OPTIONS = [
+  { label: "Month", value: "month" },
+  { label: "Week", value: "week" },
+  { label: "Day", value: "day" },
+  { label: "Agenda", value: "agenda" },
+];
+
+const MONTH_EVENT_STYLE_OPTIONS = [
+  { label: "Status tag (dot + label)", value: "statusTag" },
+  { label: "Tag (pill)", value: "tag" },
+];
+
+const OVERLAY_MODE_OPTIONS = [
+  { label: "Popover", value: "popover" },
+  { label: "Modal", value: "modal" },
+  { label: "Panel", value: "panel" },
+];
+
+const WEEK_START_OPTIONS = [
+  { label: "Sunday", value: "0" },
+  { label: "Monday", value: "1" },
+];
+
+const CALENDAR_FEATURE_OPTIONS = [
+  { label: "Search", value: "showSearch" },
+  { label: "Filters", value: "filters" },
+  { label: "Timezone selector", value: "showTimeZoneSelect" },
+];
+
+const createCalendarPlaygroundState = () => ({
+  dataset: "deals",
+  defaultView: "month",
+  monthEventStyle: "statusTag",
+  overlayMode: "popover",
+  maxEventsPerDay: 3,
+  weekStartsOn: 1,
+  dayStartHour: 8,
+  dayEndHour: 18,
+  features: ["showSearch", "filters"],
+});
+
+const CalendarPlaygroundDemo = () => {
+  const [controls, setControls] = useState(createCalendarPlaygroundState);
+
+  const updateControls = useCallback((key, value) => {
+    setControls((current) => ({ ...current, [key]: value }));
+  }, []);
+
+  const toggleFeatures = useCallback((values) => {
+    setControls((current) => ({ ...current, features: values }));
+  }, []);
+
+  const has = (feature) => controls.features.includes(feature);
+  const dataset = CALENDAR_DATASETS[controls.dataset];
+
+  const controlsOverlay = useMemo(() => (
+    <Panel id="calendar-playground-controls" title="Customize calendar" width="sm">
+      <PanelBody>
+        <PanelSection>
+          <Flex direction="column" gap="sm">
+            <Text>
+              Swap the dataset and tune the calendar props live against the same preview.
+            </Text>
+            <Select
+              label="Dataset"
+              name="calendar-playground-dataset"
+              value={controls.dataset}
+              options={DATASET_OPTIONS}
+              onChange={(value) => updateControls("dataset", value)}
+            />
+            <Select
+              label="Default view"
+              name="calendar-playground-view"
+              value={controls.defaultView}
+              options={VIEW_OPTIONS}
+              onChange={(value) => updateControls("defaultView", value)}
+            />
+            <Select
+              label="Overlay mode (on event click)"
+              name="calendar-playground-overlay"
+              value={controls.overlayMode}
+              options={OVERLAY_MODE_OPTIONS}
+              onChange={(value) => updateControls("overlayMode", value)}
+            />
+          </Flex>
+        </PanelSection>
+        <PanelSection>
+          <Flex direction="column" gap="sm">
+            <ToggleGroup
+              toggleType="checkboxList"
+              name="calendar-playground-features"
+              label="Features"
+              value={controls.features}
+              options={CALENDAR_FEATURE_OPTIONS}
+              onChange={toggleFeatures}
+            />
+          </Flex>
+        </PanelSection>
+        <PanelSection>
+          <Flex direction="column" gap="sm">
+            <Text format={{ fontWeight: "demibold" }}>Month grid</Text>
+            <Select
+              label="Month event style"
+              name="calendar-playground-month-style"
+              value={controls.monthEventStyle}
+              options={MONTH_EVENT_STYLE_OPTIONS}
+              onChange={(value) => updateControls("monthEventStyle", value)}
+            />
+            <NumberInput
+              label="Max events per day"
+              name="calendar-playground-max-events"
+              min={1}
+              max={5}
+              value={controls.maxEventsPerDay}
+              onChange={(value) => updateControls("maxEventsPerDay", value)}
+            />
+          </Flex>
+        </PanelSection>
+        <PanelSection>
+          <Flex direction="column" gap="sm">
+            <Text format={{ fontWeight: "demibold" }}>Time grid (week / day)</Text>
+            <Select
+              label="Week starts on"
+              name="calendar-playground-week-start"
+              value={String(controls.weekStartsOn)}
+              options={WEEK_START_OPTIONS}
+              onChange={(value) => updateControls("weekStartsOn", Number(value))}
+            />
+            <NumberInput
+              label="Day start hour"
+              name="calendar-playground-day-start"
+              min={0}
+              max={23}
+              value={controls.dayStartHour}
+              onChange={(value) => updateControls("dayStartHour", value)}
+            />
+            <NumberInput
+              label="Day end hour"
+              name="calendar-playground-day-end"
+              min={1}
+              max={24}
+              value={controls.dayEndHour}
+              onChange={(value) => updateControls("dayEndHour", value)}
+            />
+          </Flex>
+        </PanelSection>
+      </PanelBody>
+      <PanelFooter>
+        <Flex direction="row" justify="end">
+          <Button variant="secondary" onClick={() => setControls(createCalendarPlaygroundState())}>
+            Reset
+          </Button>
+        </Flex>
+      </PanelFooter>
+    </Panel>
+  ), [controls, updateControls, toggleFeatures]);
+
+  const customizeButton = useMemo(
+    () => <Button variant="secondary" overlay={controlsOverlay}>Customize</Button>,
+    [controlsOverlay]
+  );
+  useDemoHeaderSlot(customizeButton);
+
+  return (
+    // key forces a clean remount when dataset or default view changes so the
+    // calendar re-focuses and re-derives its initial view from the new props.
+    <Calendar
+      key={`${controls.dataset}-${controls.defaultView}`}
+      events={dataset.events}
+      eventFields={dataset.eventFields}
+      defaultView={controls.defaultView}
+      views={["month", "week", "day", "agenda"]}
+      showSearch={has("showSearch")}
+      searchFields={dataset.searchFields}
+      filters={has("filters") ? dataset.filters : []}
+      maxEventsPerDay={controls.maxEventsPerDay}
+      monthEventStyle={controls.monthEventStyle}
+      overlayMode={controls.overlayMode}
+      weekStartsOn={controls.weekStartsOn}
+      dayStartHour={controls.dayStartHour}
+      dayEndHour={controls.dayEndHour}
+      showTimeZoneSelect={has("showTimeZoneSelect")}
+    />
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Demos
 // ---------------------------------------------------------------------------
 
@@ -150,6 +373,22 @@ const DealCalendarDemo = () => (
     searchFields={["name", "owner", "stage"]}
     filters={[STAGE_FILTER]}
     maxEventsPerDay={3}
+    monthEventStyle="statusTag"
+    overlayMode="popover"
+  />
+);
+
+const DealCalendarTagDemo = () => (
+  <Calendar
+    events={DEALS}
+    eventFields={DEAL_CALENDAR_FIELDS}
+    defaultView="month"
+    views={["month", "week", "day", "agenda"]}
+    showSearch
+    searchFields={["name", "owner", "stage"]}
+    filters={[STAGE_FILTER]}
+    maxEventsPerDay={3}
+    monthEventStyle="tag"
     overlayMode="popover"
   />
 );
@@ -204,10 +443,34 @@ const DayScheduleDemo = () => (
 
 export const CALENDAR_DEMOS = [
   {
+    id: "calendar-playground",
+    name: "Interactive Calendar Playground",
+    description:
+      "Live calendar preview with a pull-out Customize drawer: swap between the deal close-date and meeting-schedule datasets, change the default view and on-click overlay mode, toggle search / filters / the timezone selector, and tune the month grid and time-grid hours.",
+    package: "calendar",
+    Component: CalendarPlaygroundDemo,
+    githubUrl: CALENDAR_DOCS,
+    sourceCode: `<Calendar
+  events={events}
+  eventFields={{ id: "id", start: "closeDate", title: "name", subtitle: "owner", color: "color" }}
+  defaultView="month"
+  views={["month", "week", "day", "agenda"]}
+  showSearch
+  searchFields={["name", "owner", "stage"]}
+  filters={[{ name: "stage", type: "multiselect", placeholder: "All stages", options: stageOptions }]}
+  maxEventsPerDay={3}
+  monthEventStyle="statusTag"   // or "tag" for a bordered pill
+  overlayMode="popover"          // "modal" / "panel" also supported
+  weekStartsOn={1}
+  dayStartHour={8}
+  dayEndHour={18}
+/>`,
+  },
+  {
     id: "calendar-deal-close-dates",
     name: "Deal close-date calendar",
     description:
-      "Deals plotted on their close date, colored by stage. The calendar auto-focuses today's month (no defaultFocusedDate set). Switch between Month / Week / Day / Agenda via the view selector; search and a stage filter scope the events; clicking an event opens a Popover.",
+      "Deals plotted on their close date, colored by stage. The calendar auto-focuses today's month (no defaultFocusedDate set). Month-cell events render as StatusTags (the default) — a colored dot + label that truncates and holds its height as columns narrow, instead of shrinking. Switch between Month / Week / Day / Agenda via the view selector; search and a stage filter scope the events; clicking an event opens a Popover.",
     package: "calendar",
     Component: DealCalendarDemo,
     githubUrl: CALENDAR_DOCS,
@@ -220,6 +483,28 @@ export const CALENDAR_DEMOS = [
   searchFields={["name", "owner", "stage"]}
   filters={[{ name: "stage", type: "multiselect", placeholder: "All stages", options: stageOptions }]}
   maxEventsPerDay={3}
+  monthEventStyle="statusTag"   // default; colored dot + label. "tag" for a bordered pill.
+  overlayMode="popover"
+/>`,
+  },
+  {
+    id: "calendar-deal-close-dates-tag",
+    name: "Deal calendar (Tag pills)",
+    description:
+      "The same deal close-date month grid, but with monthEventStyle=\"tag\" — each event is a bordered/filled Tag pill instead of a StatusTag. Like StatusTag, the pill truncates its label and keeps a fixed height as the column narrows, so events never shrink to an unreadable sliver the way the old fixed-width SVG chips did.",
+    package: "calendar",
+    Component: DealCalendarTagDemo,
+    githubUrl: CALENDAR_DOCS,
+    sourceCode: `<Calendar
+  events={deals}
+  eventFields={{ id: "id", start: "closeDate", title: "name", subtitle: "owner", color: "color" }}
+  defaultView="month"
+  views={["month", "week", "day", "agenda"]}
+  showSearch
+  searchFields={["name", "owner", "stage"]}
+  filters={[{ name: "stage", type: "multiselect", placeholder: "All stages", options: stageOptions }]}
+  maxEventsPerDay={3}
+  monthEventStyle="tag"   // bordered/filled pill; omit or use "statusTag" for the dot + label
   overlayMode="popover"
 />`,
   },

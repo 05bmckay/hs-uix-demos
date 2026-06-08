@@ -1,6 +1,19 @@
-import React, { useCallback, useState } from "react";
-import { Button, Flex, Link, Text } from "@hubspot/ui-extensions";
+import React, { useCallback, useMemo, useState } from "react";
+import {
+  Button,
+  Flex,
+  Link,
+  NumberInput,
+  Panel,
+  PanelBody,
+  PanelFooter,
+  PanelSection,
+  Select,
+  Text,
+  ToggleGroup,
+} from "@hubspot/ui-extensions";
 import { Feed } from "hs-uix";
+import { useDemoHeaderSlot } from "./demoHeader.jsx";
 
 const FEED_DOCS = "https://github.com/05bmckay/hs-uix/blob/main/packages/feed/README.md";
 
@@ -445,10 +458,298 @@ const ServerFeedDemo = () => {
 };
 
 // ---------------------------------------------------------------------------
+// Interactive Feed Playground — flagship demo with a "Customize" drawer
+// ---------------------------------------------------------------------------
+
+const FEED_DATASETS = {
+  crm: {
+    title: "Activity",
+    description: "Latest interactions across this contact.",
+    items: CRM_ACTIVITY,
+    searchFields: ["title", "body", "type", "actorName"],
+    filters: [
+      {
+        name: "type",
+        type: "multiselect",
+        placeholder: "Activity type",
+        options: [
+          { label: "Email", value: "Email" },
+          { label: "Call", value: "Call" },
+          { label: "Note", value: "Note" },
+          { label: "Meeting", value: "Meeting" },
+          { label: "Workflow", value: "Workflow" },
+        ],
+      },
+    ],
+    recordLabel: { singular: "event", plural: "events" },
+    tabs: [
+      { label: "All activities", value: "all" },
+      { label: "Notes", value: "Note" },
+      { label: "Emails", value: "Email" },
+      { label: "Calls", value: "Call" },
+      { label: "Meetings", value: "Meeting" },
+    ],
+    tabField: "type",
+  },
+  trades: {
+    title: "Trade history",
+    description: "Chronological portfolio activity across linked accounts.",
+    items: TRADES,
+    searchFields: ["title", "body", "type", "account", "broker"],
+    filters: [
+      {
+        name: "account",
+        type: "multiselect",
+        placeholder: "Account",
+        options: [
+          { label: "Growth IRA", value: "Growth IRA" },
+          { label: "Taxable", value: "Taxable" },
+        ],
+      },
+      {
+        name: "broker",
+        type: "select",
+        placeholder: "Broker",
+        options: [
+          { label: "Schwab", value: "Schwab" },
+          { label: "Fidelity", value: "Fidelity" },
+        ],
+      },
+    ],
+    recordLabel: { singular: "trade", plural: "trades" },
+  },
+  audit: {
+    title: "Audit log",
+    description: "System, API, workflow, and user events.",
+    items: AUDIT,
+    searchFields: ["title", "body", "actor", "object", "type", "source"],
+    filters: [
+      {
+        name: "source",
+        type: "multiselect",
+        placeholder: "Source",
+        options: [
+          { label: "Automation", value: "Automation" },
+          { label: "Integration", value: "Integration" },
+          { label: "CRM", value: "CRM" },
+        ],
+      },
+      {
+        name: "status",
+        type: "select",
+        placeholder: "Severity",
+        options: [
+          { label: "Info", value: "Info" },
+          { label: "Warning", value: "Warning" },
+          { label: "Complete", value: "Complete" },
+          { label: "Failed", value: "Failed" },
+        ],
+      },
+    ],
+    recordLabel: { singular: "entry", plural: "entries" },
+  },
+};
+
+const FEED_DATASET_OPTIONS = [
+  { label: "CRM activity", value: "crm" },
+  { label: "Stock trades", value: "trades" },
+  { label: "Audit log", value: "audit" },
+];
+
+const FEED_CONTAINER_OPTIONS = [
+  { label: "Card", value: "card" },
+  { label: "None", value: "none" },
+];
+
+const FEED_DEFAULT_COLLAPSED_OPTIONS = [
+  { label: "All expanded", value: "none" },
+  { label: "All collapsed", value: "all" },
+];
+
+const FEED_SORT_SELECT_OPTIONS = [
+  { label: "Newest first", value: "newest" },
+  { label: "Oldest first", value: "oldest" },
+];
+
+const FEED_FEATURE_OPTIONS = [
+  { label: "Toolbar", value: "showToolbar" },
+  { label: "Search", value: "search" },
+  { label: "Filters", value: "filters" },
+  { label: "Group by date", value: "groupByDate" },
+  { label: "Compact", value: "compact" },
+  { label: "Collapsible items", value: "collapsible" },
+  { label: "Collapse toggle", value: "showCollapseToggle" },
+  { label: "Tabs (CRM only)", value: "tabs" },
+];
+
+const FEED_PLAYGROUND_SORT = [
+  { value: "newest", label: "Newest first", field: "timestamp", direction: "desc" },
+  { value: "oldest", label: "Oldest first", field: "timestamp", direction: "asc" },
+];
+
+const createFeedPlaygroundState = () => ({
+  dataset: "crm",
+  pageSize: 5,
+  defaultCollapsed: "none",
+  defaultSort: "newest",
+  container: "card",
+  features: ["showToolbar", "search", "filters", "groupByDate", "compact", "collapsible", "showCollapseToggle"],
+});
+
+const FeedPlaygroundDemo = () => {
+  const [controls, setControls] = useState(createFeedPlaygroundState);
+
+  const updateControls = useCallback((key, value) => {
+    setControls((current) => ({ ...current, [key]: value }));
+  }, []);
+
+  const toggleFeatures = useCallback((values) => {
+    setControls((current) => ({ ...current, features: values }));
+  }, []);
+
+  const has = (feature) => controls.features.includes(feature);
+  const dataset = FEED_DATASETS[controls.dataset];
+  const tabsOn = has("tabs") && Boolean(dataset.tabs);
+
+  const controlsOverlay = useMemo(() => (
+    <Panel id="feed-playground-controls" title="Customize feed" width="sm">
+      <PanelBody>
+        <PanelSection>
+          <Flex direction="column" gap="sm">
+            <Text>
+              Swap the dataset and tune the Feed props live against the same preview.
+            </Text>
+            <Select
+              label="Dataset"
+              name="feed-playground-dataset"
+              value={controls.dataset}
+              options={FEED_DATASET_OPTIONS}
+              onChange={(value) => updateControls("dataset", value)}
+            />
+            <Select
+              label="Container"
+              name="feed-playground-container"
+              value={controls.container}
+              options={FEED_CONTAINER_OPTIONS}
+              onChange={(value) => updateControls("container", value)}
+            />
+          </Flex>
+        </PanelSection>
+        <PanelSection>
+          <Flex direction="column" gap="sm">
+            <ToggleGroup
+              toggleType="checkboxList"
+              name="feed-playground-features"
+              label="Features"
+              value={controls.features}
+              options={FEED_FEATURE_OPTIONS}
+              onChange={toggleFeatures}
+            />
+          </Flex>
+        </PanelSection>
+        <PanelSection>
+          <Flex direction="column" gap="sm">
+            <Text format={{ fontWeight: "demibold" }}>Layout</Text>
+            <Select
+              label="Default sort"
+              name="feed-playground-sort"
+              value={controls.defaultSort}
+              options={FEED_SORT_SELECT_OPTIONS}
+              onChange={(value) => updateControls("defaultSort", value)}
+            />
+            <Select
+              label="Initial collapse state"
+              name="feed-playground-collapsed"
+              value={controls.defaultCollapsed}
+              options={FEED_DEFAULT_COLLAPSED_OPTIONS}
+              onChange={(value) => updateControls("defaultCollapsed", value)}
+            />
+            <NumberInput
+              label="Page size"
+              name="feed-playground-page-size"
+              min={2}
+              max={10}
+              value={controls.pageSize}
+              onChange={(value) => updateControls("pageSize", value)}
+            />
+          </Flex>
+        </PanelSection>
+      </PanelBody>
+      <PanelFooter>
+        <Flex direction="row" justify="end">
+          <Button variant="secondary" onClick={() => setControls(createFeedPlaygroundState())}>
+            Reset
+          </Button>
+        </Flex>
+      </PanelFooter>
+    </Panel>
+  ), [controls, updateControls, toggleFeatures]);
+
+  const customizeButton = useMemo(
+    () => <Button variant="secondary" overlay={controlsOverlay}>Customize</Button>,
+    [controlsOverlay]
+  );
+  useDemoHeaderSlot(customizeButton);
+
+  return (
+    // key remounts the feed when a prop the component reads only on mount
+    // (dataset, tabs, default sort / collapse state) changes.
+    <Feed
+      key={`${controls.dataset}-${tabsOn}-${controls.defaultSort}-${controls.defaultCollapsed}`}
+      title={dataset.title}
+      description={dataset.description}
+      items={dataset.items}
+      compact={has("compact")}
+      showToolbar={has("showToolbar")}
+      collapsible={has("collapsible")}
+      showCollapseToggle={has("showCollapseToggle")}
+      groupByDate={has("groupByDate")}
+      container={controls.container}
+      pageSize={controls.pageSize}
+      defaultCollapsed={controls.defaultCollapsed === "all" ? "all" : undefined}
+      defaultSort={controls.defaultSort}
+      searchFields={has("search") ? dataset.searchFields : undefined}
+      filters={has("filters") ? dataset.filters : undefined}
+      sortOptions={FEED_PLAYGROUND_SORT}
+      recordLabel={dataset.recordLabel}
+      {...(tabsOn ? { tabs: dataset.tabs, tabField: dataset.tabField } : {})}
+    />
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Demo registry
 // ---------------------------------------------------------------------------
 
 export const FEED_DEMOS = [
+  {
+    id: "feed-playground",
+    name: "Interactive Feed Playground",
+    description:
+      "Live feed preview with a pull-out Customize drawer: swap between the CRM activity, stock-trade, and audit-log datasets, toggle the toolbar / search / filters / tabs / compact mode / collapsible items, and tune the container, default sort, initial collapse state, and page size.",
+    package: "feed",
+    Component: FeedPlaygroundDemo,
+    githubUrl: FEED_DOCS,
+    sourceCode: `<Feed
+  title="Activity"
+  items={items}
+  searchFields={["title", "body", "type", "actorName"]}
+  filters={filters}
+  tabs={tabs}                 // optional; pair with tabField
+  tabField="type"
+  sortOptions={[
+    { value: "newest", label: "Newest first", field: "timestamp", direction: "desc" },
+    { value: "oldest", label: "Oldest first", field: "timestamp", direction: "asc" },
+  ]}
+  defaultSort="newest"
+  groupByDate
+  compact={false}
+  collapsible
+  showCollapseToggle
+  container="card"            // or "none"
+  pageSize={5}
+/>`,
+  },
   {
     id: "feed-crm-timeline",
     name: "CRM activity timeline",

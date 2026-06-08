@@ -1112,12 +1112,18 @@ const ClickableJourneyDemo = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Demo — Pixel Doom (WASM framebuffer rendered as one SVG)
+// Demo — Pixel Doom (framebuffer baked to an animated PNG)
 //
-// The renderer reads a Doom-style indexed-color framebuffer and emits one
-// crisp pixel-art SVG image. The older ASCII row renderer is still present as
-// a compatibility/fallback path, but the primary viewport now uses real
-// palette colors instead of brightness glyphs for a higher-quality frame.
+// A self-contained software raycaster renders a Doom-style scene into a full
+// RGBA framebuffer — DDA-cast textured walls, a perspective-cast textured
+// floor, distance fog, billboarded imp sprites, a first-person shotgun and
+// dynamic muzzle-flash lighting. Twelve consecutive frames are then encoded,
+// entirely in JS, into one animated PNG (acTL/fcTL/fdAT) that the host <img>
+// animates natively — no iframe and no per-frame React repaint.
+//
+// readDoomRgbaFrame() prefers the runtime's getRgbaFramebuffer(); the older
+// ASCII / indexed-SVG helpers remain as the fallback path for an external
+// WASM port that only exposes an indexed-color framebuffer + palette.
 // ═══════════════════════════════════════════════════════════════════════════
 
 // The WASM port is intentionally discovered at runtime so this demo can run
@@ -1144,37 +1150,16 @@ const DOOM_SHADES = ["█", "▓", "▒", "░", "·", " "];
 const DOOM_FALLBACK_PALETTE = Array.from({ length: 256 }, (_, i) => [i, i, i]);
 
 const createDemoDoomFramebufferRuntime = () => {
-  const width = DOOM_SOURCE_W;
-  const height = DOOM_SOURCE_H;
+  const width = DOOM_SOURCE_W; // 320
+  const height = DOOM_SOURCE_H; // 200
+  // Direct RGBA render target — full per-pixel color & smooth shading, instead
+  // of snapping to a ~23-slot indexed palette. We also keep a coarse indexed
+  // framebuffer + palette so the real-WASM bridge contract (getFramebuffer)
+  // still resolves; readDoomRgbaFrame prefers getRgbaFramebuffer() when present.
+  const rgba = new Uint8Array(width * height * 4);
   const framebuffer = new Uint8Array(width * height);
-  const zBuffer = new Float32Array(width);
+  const depthBuf = new Float32Array(width);
   const palette = DOOM_FALLBACK_PALETTE.map((color) => color.slice());
-
-  // Doom-ish indexed palette slots used by the fallback framebuffer. A real
-  // WASM port will provide its own PLAYPAL / framebuffer instead.
-  palette[4] = [2, 3, 4];
-  palette[8] = [8, 10, 12];
-  palette[18] = [28, 46, 58];
-  palette[28] = [70, 104, 126];
-  palette[34] = [30, 22, 20];
-  palette[42] = [48, 34, 28];
-  palette[50] = [62, 42, 32];
-  palette[58] = [82, 58, 42];
-  palette[66] = [92, 62, 40];
-  palette[76] = [112, 74, 48];
-  palette[84] = [128, 84, 52];
-  palette[92] = [70, 70, 72];
-  palette[104] = [80, 78, 76];
-  palette[118] = [96, 92, 86];
-  palette[132] = [110, 104, 94];
-  palette[146] = [126, 116, 98];
-  palette[158] = [140, 124, 98];
-  palette[172] = [158, 136, 104];
-  palette[188] = [88, 120, 54];
-  palette[204] = [196, 44, 28];
-  palette[218] = [132, 22, 16];
-  palette[238] = [255, 146, 36];
-  palette[252] = [255, 224, 104];
 
   const map = [
     "################",
@@ -1217,20 +1202,133 @@ const createDemoDoomFramebufferRuntime = () => {
   };
 
   const isWall = (x, y) => {
-    if (x < 0 || x >= mapW || y < 0 || y >= mapH) return true;
-    return map[Math.floor(y)][Math.floor(x)] === "#";
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    if (ix < 0 || ix >= mapW || iy < 0 || iy >= mapH) return true;
+    return map[iy][ix] === "#";
   };
 
-  const put = (x, y, color) => {
-    if (x >= 0 && x < width && y >= 0 && y < height) framebuffer[y * width + x] = color;
+  // ── low-level pixel + math helpers ───────────────────────────────────────
+  const clamp8 = (v) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
+  const px = (x, y, r, g, b) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    const i = (y * width + x) * 4;
+    rgba[i] = clamp8(r);
+    rgba[i + 1] = clamp8(g);
+    rgba[i + 2] = clamp8(b);
+    rgba[i + 3] = 255;
+  };
+  const blend = (x, y, r, g, b, a) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    const i = (y * width + x) * 4;
+    rgba[i] = clamp8(rgba[i] * (1 - a) + r * a);
+    rgba[i + 1] = clamp8(rgba[i + 1] * (1 - a) + g * a);
+    rgba[i + 2] = clamp8(rgba[i + 2] * (1 - a) + b * a);
+    rgba[i + 3] = 255;
+  };
+  // Cheap deterministic value noise in [0,1].
+  const noise = (x, y) => {
+    let n = (x * 374761393 + y * 668265263) | 0;
+    n = (Math.imul(n ^ (n >> 13), 1274126177)) | 0;
+    return ((n ^ (n >> 16)) & 0xff) / 255;
   };
 
-  const fillRect = (x0, y0, w, h, color) => {
-    for (let y = Math.max(0, y0); y < Math.min(height, y0 + h); y++) {
-      for (let x = Math.max(0, x0); x < Math.min(width, x0 + w); x++) put(x, y, color);
+  // ── procedural textures (return [r,g,b]) ─────────────────────────────────
+  // Stone/brick wall, lightly varied. `cell` (the map tile) shifts the brick
+  // palette so different walls feel like different surfaces.
+  const sampleWall = (u, v, cell) => {
+    const TX = 24;
+    const TY = 40;
+    const tu = u * TX;
+    const tv = v * TY;
+    const brickH = 7;
+    const brickW = 12;
+    const rowi = Math.floor(tv / brickH);
+    const off = rowi % 2 ? brickW / 2 : 0;
+    const bx = (((tu + off) % brickW) + brickW) % brickW;
+    const by = tv % brickH;
+    const mortar = bx < 1.1 || by < 1.0;
+    // Per-brick (not per-texel) variation keeps large flat runs so DEFLATE
+    // stays compact; fine per-pixel noise would wreck the compression ratio.
+    const n2 = noise(rowi * 3 + 11, Math.floor((tu + off) / brickW) * 7);
+    if (mortar) return [34, 30, 27];
+    // Some walls read as cracked tech panels (greener/greyer).
+    const tech = (cell * 5 + 3) % 7 === 0;
+    if (tech) {
+      const base = 74 + n2 * 30;
+      const panel = by > brickH - 2 || bx > brickW - 2 ? -18 : 0;
+      return [base * 0.78 + panel, base * 0.92 + panel, base * 0.7 + panel];
+    }
+    const shade = n2 * 40;
+    return [100 + shade, 68 + shade * 0.7, 46 + shade * 0.45];
+  };
+
+  // Stone floor tiles with grout lines. Variation is per-tile (coarse) so the
+  // perspective floor cast produces long identical runs that compress well.
+  const sampleFloor = (fx, fy) => {
+    const gx = fx - Math.floor(fx);
+    const gy = fy - Math.floor(fy);
+    const grout = gx < 0.05 || gy < 0.05 || gx > 0.95 || gy > 0.95;
+    if (grout) return [26, 22, 19];
+    const tile = (Math.floor(fx) + Math.floor(fy)) & 1;
+    const n = noise(Math.floor(fx * 2), Math.floor(fy * 2));
+    const base = tile ? [92, 66, 44] : [74, 54, 38];
+    return [base[0] + n * 16 - 8, base[1] + n * 12 - 6, base[2] + n * 8 - 4];
+  };
+
+  // ── fog / lighting ───────────────────────────────────────────────────────
+  const FOG = [14, 13, 20]; // far color (dusky)
+  const fogMix = (c, dist, maxd) => {
+    let f = 1 - dist / maxd;
+    if (f < 0) f = 0;
+    if (f > 1) f = 1;
+    f = f * f * (3 - 2 * f); // smoothstep
+    return [
+      c[0] * f + FOG[0] * (1 - f),
+      c[1] * f + FOG[1] * (1 - f),
+      c[2] * f + FOG[2] * (1 - f),
+    ];
+  };
+  // Additive muzzle-flash light: bright near the player, decays with distance.
+  const flashLight = (dist) => {
+    if (state.flash <= 0) return 0;
+    const strength = (state.flash / 5) * 0.9;
+    const fall = Math.max(0, 1 - dist / 6.5);
+    return strength * fall * fall;
+  };
+
+  // ── sky ──────────────────────────────────────────────────────────────────
+  const drawSky = (horizon) => {
+    for (let y = 0; y < Math.min(height, horizon + 2); y++) {
+      const t = horizon > 0 ? y / horizon : 0;
+      // deep indigo at the top easing to a warm hellish band at the horizon
+      const r = 16 + t * t * 92;
+      const g = 18 + t * 34;
+      const b = 44 + t * 18;
+      for (let x = 0; x < width; x++) {
+        let rr = r;
+        let gg = g;
+        let bb = b;
+        // sparse stars high up
+        if (y < horizon * 0.6 && noise(x, y) > 0.987) {
+          rr = gg = bb = 150 + noise(x + 1, y) * 90;
+        }
+        // soft moon glow
+        const dx = x - width * 0.62;
+        const dy = y - horizon * 0.32;
+        const m = dx * dx * 0.6 + dy * dy;
+        if (m < 320) {
+          const k = (1 - m / 320) * 0.8;
+          rr += 90 * k;
+          gg += 86 * k;
+          bb += 70 * k;
+        }
+        px(x, y, rr, gg, bb);
+      }
     }
   };
 
+  // ── glyph helpers for the title / death screens (RGB) ────────────────────
   const glyphs = {
     D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
     E: ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
@@ -1242,16 +1340,13 @@ const createDemoDoomFramebufferRuntime = () => {
     R: ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
     S: ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
     T: ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
-    X: ["10001", "01010", "00100", "00100", "00100", "01010", "10001"],
-    Y: ["10001", "01010", "00100", "00100", "00100", "00100", "00100"],
-    F: ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
-    G: ["01110", "10001", "10000", "10111", "10001", "10001", "01110"],
-    V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
-    W: ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
     A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+    W: ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
+    F: ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+    N: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+    X: ["10001", "01010", "00100", "00100", "00100", "01010", "10001"],
   };
-
-  const drawWord = (text, x, y, scale, color, shadow = 8) => {
+  const drawWord = (text, x, y, scale, color, shadow) => {
     let cursor = x;
     [...text].forEach((ch) => {
       if (ch === " ") {
@@ -1259,12 +1354,21 @@ const createDemoDoomFramebufferRuntime = () => {
         return;
       }
       const glyph = glyphs[ch];
-      if (!glyph) return;
-      glyph.forEach((row, gy) => {
-        [...row].forEach((bit, gx) => {
+      if (!glyph) {
+        cursor += scale * 6; // keep spacing for unknown glyphs so text never jams
+        return;
+      }
+      glyph.forEach((rowStr, gy) => {
+        [...rowStr].forEach((bit, gx) => {
           if (bit !== "1") return;
-          if (shadow) fillRect(cursor + gx * scale + scale / 2, y + gy * scale + scale / 2, scale, scale, shadow);
-          fillRect(cursor + gx * scale, y + gy * scale, scale, scale, color);
+          for (let sy = 0; sy < scale; sy++) {
+            for (let sx = 0; sx < scale; sx++) {
+              if (shadow) px(cursor + gx * scale + sx + (scale >> 1), y + gy * scale + sy + (scale >> 1), shadow[0], shadow[1], shadow[2]);
+            }
+          }
+          for (let sy = 0; sy < scale; sy++) {
+            for (let sx = 0; sx < scale; sx++) px(cursor + gx * scale + sx, y + gy * scale + sy, color[0], color[1], color[2]);
+          }
         });
       });
       cursor += scale * 6;
@@ -1272,238 +1376,289 @@ const createDemoDoomFramebufferRuntime = () => {
   };
 
   const drawTitle = () => {
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const vignette = Math.abs(x - width / 2) / width + Math.abs(y - height / 2) / height;
-        framebuffer[y * width + x] = vignette > 0.55 ? 4 : y < height * 0.52 ? 18 : 42;
-      }
-    }
-    // Infernal skyline / floor.
-    for (let x = 0; x < width; x += 12) {
-      const h = 18 + ((x * 17 + state.titleTick) % 34);
-      fillRect(x, Math.floor(height * 0.53) - h, 10, h, x % 3 ? 8 : 18);
-    }
-    for (let y = Math.floor(height * 0.58); y < height; y += 8) {
-      for (let x = 0; x < width; x++) put(x, y, 76);
-    }
-
-    drawWord("DOOM", 40, 34, 12, 204, 8);
-    drawWord("PIXEL", 80, 126, 4, 252, 8);
-    if (Math.floor(state.titleTick / 8) % 2 === 0) drawWord("PRESS FIRE", 88, 160, 3, 252, 8);
-    drawWord("WASD ARROWS", 78, 184, 2, 146, 4);
-  };
-
-  const castRay = (angle) => {
-    const dx = Math.cos(angle);
-    const dy = Math.sin(angle);
-    let dist = 0.05;
-    let hitX = state.x;
-    let hitY = state.y;
-    while (dist < 18) {
-      hitX = state.x + dx * dist;
-      hitY = state.y + dy * dist;
-      if (isWall(hitX, hitY)) break;
-      dist += 0.025;
-    }
-    const fracX = hitX - Math.floor(hitX);
-    const fracY = hitY - Math.floor(hitY);
-    const seam = Math.min(fracX, 1 - fracX, fracY, 1 - fracY) < 0.045;
-    return { dist, hitX, hitY, seam };
-  };
-
-  const drawBackground = () => {
-    const horizon = Math.floor(height * 0.47);
-    const cosA = Math.cos(state.angle);
-    const sinA = Math.sin(state.angle);
-    const sideCos = Math.cos(state.angle + Math.PI / 2);
-    const sideSin = Math.sin(state.angle + Math.PI / 2);
-
-    for (let y = 0; y < height; y++) {
-      const row = y * width;
-      if (y < horizon) {
-        const t = y / Math.max(1, horizon);
-        for (let x = 0; x < width; x++) {
-          const cloud = Math.sin(x * 0.035 + state.angle * 2.5) + Math.sin((x + y) * 0.018);
-          framebuffer[row + x] = cloud > 1.15 ? 28 : t < 0.34 ? 18 : t < 0.72 ? 28 : 34;
-        }
-      } else {
-        const depth = (y - horizon) / Math.max(1, height - horizon);
-        const perspective = 1 / Math.max(0.045, depth);
-        for (let x = 0; x < width; x++) {
-          const lateral = ((x - width / 2) / width) * perspective * 1.85;
-          const worldX = state.x + cosA * perspective + sideCos * lateral;
-          const worldY = state.y + sinA * perspective + sideSin * lateral;
-          const tileX = Math.floor(worldX * 2);
-          const tileY = Math.floor(worldY * 2);
-          const checker = (tileX + tileY) % 2;
-          const grout = Math.abs(worldX * 2 - Math.round(worldX * 2)) < 0.045 || Math.abs(worldY * 2 - Math.round(worldY * 2)) < 0.045;
-          const speckle = (Math.floor(worldX * 17) * 13 + Math.floor(worldY * 19) * 7) % 11;
-          let color = checker ? 58 : 42;
-          if (depth > 0.66) color = checker ? 76 : 50;
-          if (grout) color = 34;
-          else if (speckle === 0) color = checker ? 66 : 50;
-          framebuffer[row + x] = color;
-        }
-      }
-    }
-  };
-
-  const drawWalls = () => {
-    const fov = Math.PI / 3;
-    const horizon = Math.floor(height * 0.49 + Math.sin(state.bob) * 3);
+    const horizon = Math.floor(height * 0.62);
+    drawSky(horizon);
+    // jagged hell skyline
     for (let x = 0; x < width; x++) {
-      const rayAngle = state.angle - fov / 2 + (x / width) * fov;
-      const ray = castRay(rayAngle);
-      const corrected = ray.dist * Math.cos(rayAngle - state.angle);
-      zBuffer[x] = corrected;
-      const wallH = Math.min(height * 1.6, Math.floor((height * 0.92) / Math.max(0.12, corrected)));
-      const top = Math.max(0, Math.floor(horizon - wallH / 2));
-      const bottom = Math.min(height - 1, Math.floor(horizon + wallH / 2));
-      const shade = corrected < 2.3 ? 172 : corrected < 4.5 ? 146 : corrected < 7 ? 118 : 92;
-      const wallU = Math.abs(ray.hitX - Math.round(ray.hitX)) < Math.abs(ray.hitY - Math.round(ray.hitY)) ? ray.hitY : ray.hitX;
+      const h = 18 + Math.floor((Math.sin(x * 0.06) + Math.sin(x * 0.013 + 1.3)) * 14 + (noise(x, 3) * 16));
+      for (let y = horizon - h; y < horizon; y++) px(x, y, 22 + noise(x, y) * 16, 14, 18);
+    }
+    // smouldering ground
+    for (let y = horizon; y < height; y++) {
+      const t = (y - horizon) / (height - horizon);
+      for (let x = 0; x < width; x++) {
+        const ember = noise(x, y + state.titleTick) > 0.96 ? 1 : 0;
+        px(x, y, 40 + t * 30 + ember * 120, 18 + t * 12 + ember * 50, 14 + t * 8);
+      }
+    }
+    const flicker = 1 + Math.sin(state.titleTick * 0.4) * 0.06;
+    drawWord("DOOM", 92, 44, 9, [Math.floor(196 * flicker), 40, 26], [40, 6, 4]);
+    drawWord("PIXEL", 120, 116, 4, [232, 196, 90], [30, 18, 6]);
+    if (Math.floor(state.titleTick / 8) % 2 === 0) drawWord("PRESS FIRE", 110, 150, 3, [236, 222, 120], [20, 16, 8]);
+  };
+
+  // ── the 3D scene (DDA raycaster) ─────────────────────────────────────────
+  const FOV = 0.66; // camera-plane half-extent (~66° fov)
+
+  const drawScene = () => {
+    const horizon = Math.floor(height * 0.5 + Math.sin(state.bob) * 4);
+    const dirX = Math.cos(state.angle);
+    const dirY = Math.sin(state.angle);
+    const planeX = -dirY * FOV;
+    const planeY = dirX * FOV;
+
+    drawSky(horizon);
+
+    // Perspective-correct textured floor (cast per scanline below the horizon).
+    const rayX0 = dirX - planeX;
+    const rayY0 = dirY - planeY;
+    const rayX1 = dirX + planeX;
+    const rayY1 = dirY + planeY;
+    for (let y = horizon + 1; y < height; y++) {
+      const p = y - horizon;
+      const rowDist = (0.5 * height) / p;
+      const stepX = (rowDist * (rayX1 - rayX0)) / width;
+      const stepY = (rowDist * (rayY1 - rayY0)) / width;
+      let floorX = state.x + rowDist * rayX0;
+      let floorY = state.y + rowDist * rayY0;
+      const light = flashLight(rowDist);
+      for (let x = 0; x < width; x++) {
+        let c = sampleFloor(floorX, floorY);
+        c = fogMix(c, rowDist, 13);
+        if (light > 0) {
+          c = [c[0] + 220 * light, c[1] + 150 * light, c[2] + 70 * light];
+        }
+        px(x, y, c[0], c[1], c[2]);
+        floorX += stepX;
+        floorY += stepY;
+      }
+    }
+
+    // Walls via DDA — crisp grid-aligned hits and a stable texture coordinate.
+    for (let x = 0; x < width; x++) {
+      const cameraX = (2 * x) / width - 1;
+      const rayDirX = dirX + planeX * cameraX;
+      const rayDirY = dirY + planeY * cameraX;
+      let mapX = Math.floor(state.x);
+      let mapY = Math.floor(state.y);
+      const deltaX = rayDirX === 0 ? 1e30 : Math.abs(1 / rayDirX);
+      const deltaY = rayDirY === 0 ? 1e30 : Math.abs(1 / rayDirY);
+      let stepX;
+      let stepY;
+      let sideX;
+      let sideY;
+      if (rayDirX < 0) {
+        stepX = -1;
+        sideX = (state.x - mapX) * deltaX;
+      } else {
+        stepX = 1;
+        sideX = (mapX + 1 - state.x) * deltaX;
+      }
+      if (rayDirY < 0) {
+        stepY = -1;
+        sideY = (state.y - mapY) * deltaY;
+      } else {
+        stepY = 1;
+        sideY = (mapY + 1 - state.y) * deltaY;
+      }
+      let side = 0;
+      let guard = 0;
+      while (guard++ < 64) {
+        if (sideX < sideY) {
+          sideX += deltaX;
+          mapX += stepX;
+          side = 0;
+        } else {
+          sideY += deltaY;
+          mapY += stepY;
+          side = 1;
+        }
+        if (mapX < 0 || mapX >= mapW || mapY < 0 || mapY >= mapH || map[mapY][mapX] === "#") break;
+      }
+      const perpDist = side === 0 ? sideX - deltaX : sideY - deltaY;
+      depthBuf[x] = perpDist;
+      let wallX = side === 0 ? state.y + perpDist * rayDirY : state.x + perpDist * rayDirX;
+      wallX -= Math.floor(wallX);
+
+      const lineH = Math.floor(height / Math.max(0.0001, perpDist));
+      let drawStart = Math.floor(horizon - lineH / 2);
+      let drawEnd = Math.floor(horizon + lineH / 2);
+      const top = Math.max(0, drawStart);
+      const bottom = Math.min(height - 1, drawEnd);
+      const cell = (mapX * 7 + mapY * 13) & 0xff;
+      const sideShade = side === 1 ? 0.68 : 1; // N/S walls darker for fake light
+      const light = flashLight(perpDist);
 
       for (let y = top; y <= bottom; y++) {
-        const v = (y - top) / Math.max(1, wallH);
-        const brickY = Math.floor(v * 14);
-        const brickOffset = brickY % 2 ? 0.5 : 0;
-        const brickX = Math.floor((wallU * 5 + brickOffset) % 1 * 8);
-        const mortar = ray.seam || Math.abs(v * 14 - Math.round(v * 14)) < 0.055 || brickX === 0;
-        const panel = Math.floor(wallU * 3) % 5 === 0 && brickX > 2 && brickX < 5;
-        const grime = (Math.floor(wallU * 41) + Math.floor(v * 37)) % 13 === 0;
-        const torch = Math.floor(wallU * 2) % 9 === 0 && v > 0.18 && v < 0.38;
-        const highlight = y === top || y === bottom;
-        let color = shade;
-        if (torch) color = v < 0.28 ? 238 : 204;
-        else if (highlight) color = 252;
-        else if (mortar) color = corrected < 4 ? 84 : 76;
-        else if (panel) color = corrected < 4 ? 132 : 104;
-        else if (grime) color = corrected < 4 ? 76 : 58;
-        put(x, y, color);
+        const v = (y - drawStart) / lineH;
+        let c = sampleWall(wallX, v, cell);
+        c = [c[0] * sideShade, c[1] * sideShade, c[2] * sideShade];
+        c = fogMix(c, perpDist, 13);
+        if (light > 0) {
+          c = [c[0] + 230 * light, c[1] + 158 * light, c[2] + 74 * light];
+        }
+        px(x, y, c[0], c[1], c[2]);
       }
     }
   };
 
-  const drawEnemySprite = (enemy, forward, side) => {
-    const fov = Math.PI / 3;
-    const projection = width / (2 * Math.tan(fov / 2));
-    const screenX = Math.floor(width / 2 + (side / forward) * projection);
-    const spriteH = Math.min(height * 1.2, Math.floor((height * 0.82) / forward));
-    const spriteW = Math.floor(spriteH * 0.58);
-    const top = Math.floor(height * 0.52 - spriteH * 0.58 + Math.sin(state.bob + enemy.phase) * 2);
-    const left = screenX - Math.floor(spriteW / 2);
+  // ── enemy imps (billboarded sprites, depth-tested) ───────────────────────
+  const drawEnemySprite = (enemy, transformX, transformY) => {
+    const spriteH = Math.abs(Math.floor(height / transformY));
+    const spriteW = Math.floor(spriteH * 0.62);
+    const horizon = Math.floor(height * 0.5 + Math.sin(state.bob) * 4);
+    const screenX = Math.floor((width / 2) * (1 + transformX / transformY));
+    const bobY = Math.sin(state.bob + enemy.phase) * spriteH * 0.02;
+    // Must floor: a fractional y makes px()'s typed-array index fractional,
+    // which silently drops the write (this once made imps invisible).
+    const top = Math.floor(horizon + spriteH / 2 - spriteH + bobY);
+    const left = screenX - (spriteW >> 1);
+    const fog = Math.max(0.25, 1 - transformY / 12);
 
-    for (let sy = 0; sy < spriteH; sy++) {
-      const ny = sy / spriteH;
-      const y = top + sy;
-      if (y < 0 || y >= height) continue;
-      for (let sx = 0; sx < spriteW; sx++) {
-        const x = left + sx;
-        if (x < 0 || x >= width || forward >= zBuffer[x]) continue;
-        const nx = (sx / spriteW - 0.5) * 2;
-        let color = 0;
+    for (let sx = 0; sx < spriteW; sx++) {
+      const x = left + sx;
+      if (x < 0 || x >= width) continue;
+      if (transformY >= depthBuf[x]) continue;
+      const nx = (sx / spriteW - 0.5) * 2; // -1..1
+      for (let sy = 0; sy < spriteH; sy++) {
+        const y = top + sy;
+        if (y < 0 || y >= height) continue;
+        const ny = sy / spriteH; // 0 top .. 1 bottom
+        let c = null;
 
-        const head = (nx * nx) / 0.28 + ((ny - 0.18) * (ny - 0.18)) / 0.035 < 1;
-        const torso = Math.abs(nx) < 0.48 * (1 - Math.max(0, ny - 0.35) * 0.7) && ny > 0.25 && ny < 0.74;
-        const legs = ny >= 0.68 && ny < 0.98 && (Math.abs(nx - 0.18) < 0.16 || Math.abs(nx + 0.18) < 0.16);
-        const arms = ny > 0.36 && ny < 0.62 && (Math.abs(nx - 0.58) < 0.12 || Math.abs(nx + 0.58) < 0.12);
-        const eyes = head && ny > 0.16 && ny < 0.22 && (Math.abs(nx - 0.16) < 0.06 || Math.abs(nx + 0.16) < 0.06);
+        const head = (nx * nx) / 0.32 + ((ny - 0.16) * (ny - 0.16)) / 0.022 < 1;
+        const hornL = ny < 0.14 && Math.abs(nx + 0.34 - ny * 0.6) < 0.07;
+        const hornR = ny < 0.14 && Math.abs(nx - 0.34 + ny * 0.6) < 0.07;
+        const torso = Math.abs(nx) < 0.5 * (1 - Math.max(0, ny - 0.4) * 0.8) && ny > 0.3 && ny < 0.78;
+        const arms = ny > 0.34 && ny < 0.64 && (Math.abs(nx - 0.56) < 0.13 || Math.abs(nx + 0.56) < 0.13);
+        const legs = ny >= 0.74 && ny < 0.98 && (Math.abs(nx - 0.2) < 0.15 || Math.abs(nx + 0.2) < 0.15);
+        const eyes = head && ny > 0.13 && ny < 0.2 && (Math.abs(nx - 0.17) < 0.07 || Math.abs(nx + 0.17) < 0.07);
+        const mouth = head && ny > 0.23 && ny < 0.27 && Math.abs(nx) < 0.16;
 
-        if (eyes) color = 252;
-        else if (head) color = 188;
-        else if (torso) color = 218;
-        else if (arms || legs) color = 76;
-        if (!color) continue;
+        const shadeN = noise(sx, sy) * 0.18 + 0.9;
+        if (eyes) c = [255, 230, 80];
+        else if (mouth) c = [120, 20, 10];
+        else if (hornL || hornR) c = [150, 130, 110];
+        else if (head) c = [120 * shadeN, 70 * shadeN, 58 * shadeN];
+        else if (torso) c = [150 * shadeN, 52 * shadeN, 40 * shadeN];
+        else if (arms || legs) c = [96 * shadeN, 44 * shadeN, 36 * shadeN];
+        if (!c) continue;
 
-        // Cheap sprite shading by distance and a black outline near the edge.
-        const edge = Math.abs(nx) > 0.52 || ny < 0.04 || ny > 0.94;
-        if (edge) color = 8;
-        else if (forward > 5 && color !== 252) color = color === 218 ? 204 : 92;
-        put(x, y, color);
+        // dark rim + distance fog
+        const rim = Math.abs(nx) > 0.5 || ny < 0.03 || ny > 0.95;
+        if (rim && !eyes) c = [c[0] * 0.3, c[1] * 0.3, c[2] * 0.3];
+        if (!eyes) c = [c[0] * fog, c[1] * fog, c[2] * fog];
+        px(x, y, c[0], c[1], c[2]);
       }
     }
   };
 
   const drawEnemies = () => {
-    const cosA = Math.cos(state.angle);
-    const sinA = Math.sin(state.angle);
+    const dirX = Math.cos(state.angle);
+    const dirY = Math.sin(state.angle);
+    const planeX = -dirY * FOV;
+    const planeY = dirX * FOV;
+    const invDet = 1 / (planeX * dirY - dirX * planeY);
     enemies
-      .filter((enemy) => enemy.alive)
-      .map((enemy) => {
-        const dx = enemy.x - state.x;
-        const dy = enemy.y - state.y;
+      .filter((e) => e.alive)
+      .map((e) => {
+        const relX = e.x - state.x;
+        const relY = e.y - state.y;
         return {
-          enemy,
-          forward: dx * cosA + dy * sinA,
-          side: -dx * sinA + dy * cosA,
-          dist2: dx * dx + dy * dy,
+          e,
+          tx: invDet * (dirY * relX - dirX * relY),
+          ty: invDet * (-planeY * relX + planeX * relY),
         };
       })
-      .filter((item) => item.forward > 0.25 && Math.abs(item.side / item.forward) < 1.2)
-      .sort((a, b) => b.dist2 - a.dist2)
-      .forEach((item) => drawEnemySprite(item.enemy, item.forward, item.side));
+      .filter((s) => s.ty > 0.2)
+      .sort((a, b) => b.ty - a.ty)
+      .forEach((s) => drawEnemySprite(s.e, s.tx, s.ty));
+  };
+
+  // ── first-person shotgun ─────────────────────────────────────────────────
+  const drawWeapon = () => {
+    const bob = Math.sin(state.bob) * 4;
+    const cx = Math.floor(width / 2 + Math.cos(state.bob * 0.5) * 3);
+    const baseY = Math.floor(height * 0.74 + bob);
+    const recoil = state.flash > 0 ? (5 - state.flash) * 3 : 0;
+    const gy = baseY + recoil;
+
+    // gloved hands / forearms
+    for (let y = gy + 26; y < height; y++) {
+      const t = (y - (gy + 26)) / Math.max(1, height - (gy + 26));
+      const half = Math.floor(20 + t * 46);
+      for (let x = cx - half; x <= cx + half; x++) {
+        const edge = Math.abs(x - cx) > half - 6;
+        const n = noise(x, y) * 18;
+        px(x, y, (edge ? 70 : 120) + n, (edge ? 44 : 78) + n, (edge ? 36 : 60) + n);
+      }
+    }
+    // wooden pump / receiver
+    for (let y = gy + 8; y < gy + 30; y++) {
+      const half = 16;
+      for (let x = cx - half; x <= cx + half; x++) {
+        const grain = noise(x, y * 3) * 26;
+        px(x, y, 96 + grain, 58 + grain * 0.6, 30 + grain * 0.3);
+      }
+    }
+    // twin steel barrels
+    for (let y = gy - 34; y < gy + 12; y++) {
+      for (const ox of [-7, 7]) {
+        for (let dx = -5; dx <= 5; dx++) {
+          const x = cx + ox + dx;
+          const sheen = 1 - Math.abs(dx) / 6;
+          const v = 60 + sheen * 110;
+          px(x, y, v, v + 6, v + 14);
+        }
+      }
+    }
+    // muzzle + dark bore
+    for (let y = gy - 38; y < gy - 32; y++) for (let dx = -13; dx <= 13; dx++) px(cx + dx, y, 30, 30, 36);
+
+    // muzzle flash
+    if (state.flash > 0) {
+      const k = state.flash / 5;
+      for (let y = gy - 70; y < gy - 28; y++) {
+        for (let x = cx - 34; x <= cx + 34; x++) {
+          const dx = (x - cx) / (30 * k + 6);
+          const dy = (y - (gy - 46)) / (24 * k + 4);
+          const r = dx * dx + dy * dy;
+          if (r < 1) {
+            const core = r < 0.35;
+            blend(x, y, core ? 255 : 255, core ? 250 : 200, core ? 210 : 70, (1 - r) * (0.6 + k * 0.4));
+          }
+        }
+      }
+    }
+
+    // crosshair
+    const chx = Math.floor(width / 2);
+    const chy = Math.floor(height * 0.5);
+    for (let d = -5; d <= 5; d++) {
+      if (Math.abs(d) > 1) {
+        px(chx + d, chy, 230, 230, 200);
+        px(chx, chy + d, 230, 230, 200);
+      }
+    }
   };
 
   const drawDamageOverlay = () => {
     if (state.hurtFlash > 0) {
+      const a = (state.hurtFlash / 5) * 0.45;
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          const edge = Math.max(
-            Math.abs(x - width / 2) / (width / 2),
-            Math.abs(y - height / 2) / (height / 2),
-          );
-          if (edge > 0.62 || (x + y + state.hurtFlash) % 13 === 0) put(x, y, 204);
+          const edge = Math.max(Math.abs(x - width / 2) / (width / 2), Math.abs(y - height / 2) / (height / 2));
+          if (edge > 0.5) blend(x, y, 180, 20, 16, a * (edge - 0.5) * 2);
         }
       }
       state.hurtFlash--;
     }
-
     if (state.mode === "dead") {
       for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          if ((x + y) % 3 === 0) put(x, y, 8);
-          if (y > height * 0.62 && (x + y) % 2 === 0) put(x, y, 204);
-        }
+        for (let x = 0; x < width; x++) blend(x, y, 120, 10, 6, 0.55);
       }
-      drawWord("DIED", 86, 72, 9, 204, 8);
-      drawWord("PRESS FIRE", 88, 152, 3, 252, 8);
-    }
-  };
-
-  const drawWeapon = () => {
-    const bob = Math.sin(state.bob) * 3;
-    const cx = Math.floor(width / 2);
-    const baseY = Math.floor(height * 0.78 + bob);
-
-    for (let y = baseY; y < height; y++) {
-      const t = (y - baseY) / Math.max(1, height - baseY);
-      const half = Math.floor(18 + t * 42);
-      for (let x = cx - half; x <= cx + half; x++) {
-        const edge = Math.abs(x - cx) > half - 5;
-        put(x, y, edge ? 42 : 92);
-      }
-    }
-    for (let y = baseY - 30; y < baseY + 20; y++) {
-      const half = y < baseY - 8 ? 7 : 12;
-      for (let x = cx - half; x <= cx + half; x++) put(x, y, 118);
-    }
-    for (let y = baseY - 34; y < baseY - 24; y++) {
-      for (let x = cx - 4; x <= cx + 4; x++) put(x, y, 8);
-    }
-
-    if (state.flash > 0) {
-      for (let y = baseY - 62; y < baseY - 20; y++) {
-        for (let x = cx - 28; x <= cx + 28; x++) {
-          const dx = (x - cx) / 28;
-          const dy = (y - (baseY - 42)) / 22;
-          if (dx * dx + dy * dy < 1) put(x, y, state.flash % 2 ? 252 : 238);
-        }
-      }
-      state.flash--;
-    }
-
-    for (let d = -5; d <= 5; d++) {
-      put(cx + d, Math.floor(height * 0.48), 252);
-      put(cx, Math.floor(height * 0.48) + d, 252);
+      drawWord("DIED", 108, 70, 9, [210, 40, 28], [30, 4, 4]);
+      drawWord("PRESS FIRE", 110, 150, 3, [236, 222, 120], [20, 16, 8]);
     }
   };
 
@@ -1512,8 +1667,7 @@ const createDemoDoomFramebufferRuntime = () => {
       drawTitle();
       return;
     }
-    drawBackground();
-    drawWalls();
+    drawScene();
     drawEnemies();
     drawWeapon();
     drawDamageOverlay();
@@ -1571,7 +1725,7 @@ const createDemoDoomFramebufferRuntime = () => {
       const dy = enemy.y - state.y;
       const forward = dx * cosA + dy * sinA;
       const side = Math.abs(-dx * sinA + dy * cosA);
-      if (forward > 0.2 && forward < bestForward && side < Math.max(0.25, forward * 0.08)) {
+      if (forward > 0.2 && forward < bestForward && side < Math.max(0.3, forward * 0.12)) {
         target = enemy;
         bestForward = forward;
       }
@@ -1593,6 +1747,7 @@ const createDemoDoomFramebufferRuntime = () => {
     framebuffer,
     palette,
     getFramebuffer: () => ({ data: framebuffer, width, height, palette }),
+    getRgbaFramebuffer: () => ({ data: rgba, width, height }),
     getStatus,
     sendKey: (key, pressed) => {
       const normalized = key.length === 1 ? key.toLowerCase() : key;
@@ -1607,10 +1762,12 @@ const createDemoDoomFramebufferRuntime = () => {
     tick: () => {
       if (state.mode === "title") {
         state.titleTick++;
+        if (state.flash > 0) state.flash--;
         draw();
         return;
       }
       if (state.mode === "dead") {
+        if (state.flash > 0) state.flash--;
         draw();
         return;
       }
@@ -1628,6 +1785,7 @@ const createDemoDoomFramebufferRuntime = () => {
       } else {
         state.bob *= 0.9;
       }
+      if (state.flash > 0) state.flash--;
 
       state.attackCooldown = Math.max(0, state.attackCooldown - 1);
       enemies.forEach((enemy) => {
@@ -1989,14 +2147,464 @@ const makeDoomPixelViewportSvg = () => {
   };
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Pure-JS APNG encoder (CRC32 + Adler32 + DEFLATE + PNG/APNG chunks)
+//
+// The viewport used to be repainted as a fresh SVG ~10×/second, forcing React
+// to diff a new <Image> every frame. Instead we now bake N consecutive Doom
+// frames into a single animated PNG (acTL / fcTL / fdAT) and hand it to one
+// <Image> as a data URI. If the host <img> supports APNG it animates the loop
+// natively — motion with no iframe and no per-frame React work; if it doesn't,
+// it degrades to a crisp static first frame. The whole pipeline (real DEFLATE
+// with fixed-Huffman + greedy LZ77, adaptive scanline filtering, CRCs) is
+// validated against Node's zlib inflate, so the streams are spec-correct.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const DOOM_APNG_W = 200; // encoded frame width  (320×200 source / 1.6)
+const DOOM_APNG_H = 125; // encoded frame height
+const DOOM_APNG_FRAMES = 12; // frames per baked loop
+const DOOM_APNG_DELAY_DEN = 12; // frame delay denominator → ~12 fps loop
+const DOOM_APNG_SCALE = 2; // <Image> upscale factor for the pixel art
+// Quantize each channel to 32 levels. The retro banding reads as authentic
+// Doom and roughly halves the encoded loop (fewer distinct bytes → better
+// DEFLATE runs). 0 disables.
+const DOOM_APNG_POSTERIZE = 8;
+const doomQuant = (v) => {
+  if (!DOOM_APNG_POSTERIZE) return v < 0 ? 0 : v > 255 ? 255 : v | 0;
+  const q = Math.round(v / DOOM_APNG_POSTERIZE) * DOOM_APNG_POSTERIZE;
+  return q > 255 ? 255 : q;
+};
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+const crc32 = (bytes, start = 0, end = bytes.length) => {
+  let c = 0xffffffff;
+  for (let i = start; i < end; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+
+const adler32 = (bytes) => {
+  let a = 1;
+  let b = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    a = (a + bytes[i]) % 65521;
+    b = (b + a) % 65521;
+  }
+  return ((b << 16) | a) >>> 0;
+};
+
+// DEFLATE bit writer — codes are packed LSB-first per RFC 1951.
+class DeflateBitWriter {
+  constructor() {
+    this.bytes = [];
+    this.cur = 0;
+    this.nbits = 0;
+  }
+  writeBits(value, count) {
+    for (let i = 0; i < count; i++) {
+      this.cur |= ((value >> i) & 1) << this.nbits;
+      this.nbits++;
+      if (this.nbits === 8) {
+        this.bytes.push(this.cur);
+        this.cur = 0;
+        this.nbits = 0;
+      }
+    }
+  }
+  // Huffman codes are emitted most-significant-bit first.
+  writeHuff(code, len) {
+    for (let i = len - 1; i >= 0; i--) this.writeBits((code >> i) & 1, 1);
+  }
+  finish() {
+    if (this.nbits > 0) {
+      this.bytes.push(this.cur);
+      this.cur = 0;
+      this.nbits = 0;
+    }
+    return this.bytes;
+  }
+}
+
+// Fixed Huffman literal/length code (RFC 1951 §3.2.6).
+const fixedLitCode = (sym) => {
+  if (sym <= 143) return { code: 0x30 + sym, len: 8 };
+  if (sym <= 255) return { code: 0x190 + (sym - 144), len: 9 };
+  if (sym <= 279) return { code: 0x000 + (sym - 256), len: 7 };
+  return { code: 0xc0 + (sym - 280), len: 8 };
+};
+
+const DEFLATE_LEN_BASE = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+const DEFLATE_LEN_EXTRA = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+const DEFLATE_DIST_BASE = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+const DEFLATE_DIST_EXTRA = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+
+const deflateLenSym = (len) => {
+  for (let i = DEFLATE_LEN_BASE.length - 1; i >= 0; i--) if (len >= DEFLATE_LEN_BASE[i]) return i;
+  return 0;
+};
+const deflateDistSym = (dist) => {
+  for (let i = DEFLATE_DIST_BASE.length - 1; i >= 0; i--) if (dist >= DEFLATE_DIST_BASE[i]) return i;
+  return 0;
+};
+
+// Single fixed-Huffman block with greedy LZ77 matching, wrapped in a zlib
+// stream. Validated to round-trip through Node's zlib.inflateSync.
+const deflate = (data) => {
+  const bw = new DeflateBitWriter();
+  bw.writeBits(1, 1); // BFINAL = 1
+  bw.writeBits(1, 2); // BTYPE = 01 (fixed Huffman)
+
+  const n = data.length;
+  const WSIZE = 32768;
+  const MIN_MATCH = 3;
+  const MAX_MATCH = 258;
+  const head = new Int32Array(65536).fill(-1);
+  const prev = new Int32Array(Math.max(1, n)).fill(-1);
+  const hash = (i) => ((data[i] << 10) ^ (data[i + 1] << 5) ^ data[i + 2]) & 0xffff;
+
+  const emitLiteral = (b) => {
+    const { code, len } = fixedLitCode(b);
+    bw.writeHuff(code, len);
+  };
+  const emitMatch = (length, dist) => {
+    const ls = deflateLenSym(length);
+    const lit = fixedLitCode(257 + ls); // length symbols are 257..285
+    bw.writeHuff(lit.code, lit.len);
+    bw.writeBits(length - DEFLATE_LEN_BASE[ls], DEFLATE_LEN_EXTRA[ls]);
+    const ds = deflateDistSym(dist);
+    bw.writeHuff(ds, 5); // fixed-Huffman distance codes are 5-bit, MSB-first
+    bw.writeBits(dist - DEFLATE_DIST_BASE[ds], DEFLATE_DIST_EXTRA[ds]);
+  };
+
+  let i = 0;
+  while (i < n) {
+    let bestLen = 0;
+    let bestDist = 0;
+    if (i + MIN_MATCH <= n) {
+      const h = hash(i);
+      let j = head[h];
+      let chain = 0;
+      const maxLen = Math.min(MAX_MATCH, n - i);
+      while (j >= 0 && i - j <= WSIZE && chain < 64) {
+        if (data[j + bestLen] === data[i + bestLen]) {
+          let l = 0;
+          while (l < maxLen && data[j + l] === data[i + l]) l++;
+          if (l > bestLen) {
+            bestLen = l;
+            bestDist = i - j;
+            if (l >= maxLen) break;
+          }
+        }
+        j = prev[j];
+        chain++;
+      }
+    }
+    if (bestLen >= MIN_MATCH) {
+      emitMatch(bestLen, bestDist);
+      const end = i + bestLen;
+      while (i < end) {
+        if (i + MIN_MATCH <= n) {
+          const h = hash(i);
+          prev[i] = head[h];
+          head[h] = i;
+        }
+        i++;
+      }
+    } else {
+      emitLiteral(data[i]);
+      if (i + MIN_MATCH <= n) {
+        const h = hash(i);
+        prev[i] = head[h];
+        head[h] = i;
+      }
+      i++;
+    }
+  }
+  const eob = fixedLitCode(256);
+  bw.writeHuff(eob.code, eob.len);
+
+  const compressed = bw.finish();
+  const out = new Uint8Array(2 + compressed.length + 4);
+  out[0] = 0x78; // zlib CMF
+  out[1] = 0x01; // zlib FLG
+  out.set(compressed, 2);
+  const ad = adler32(data);
+  const o = 2 + compressed.length;
+  out[o] = (ad >>> 24) & 0xff;
+  out[o + 1] = (ad >>> 16) & 0xff;
+  out[o + 2] = (ad >>> 8) & 0xff;
+  out[o + 3] = ad & 0xff;
+  return out;
+};
+
+// Paeth predictor + adaptive PNG scanline filtering (RGBA, 4 bytes/pixel).
+const pngPaeth = (a, b, c) => {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+};
+
+const pngFilterImage = (rgba, w, h) => {
+  const bpp = 4;
+  const stride = w * bpp;
+  const out = new Uint8Array(h * (stride + 1));
+  const tmp = new Uint8Array(stride);
+  const best = new Uint8Array(stride);
+  for (let y = 0; y < h; y++) {
+    const row = y * stride;
+    const prevRow = row - stride;
+    let bestType = 0;
+    let bestScore = Infinity;
+    // Try None/Sub/Up/Average/Paeth, keep the lowest absolute-deviation row.
+    for (let type = 0; type < 5; type++) {
+      let score = 0;
+      for (let x = 0; x < stride; x++) {
+        const cur = rgba[row + x];
+        const a = x >= bpp ? rgba[row + x - bpp] : 0;
+        const b = y > 0 ? rgba[prevRow + x] : 0;
+        const c = y > 0 && x >= bpp ? rgba[prevRow + x - bpp] : 0;
+        let v;
+        if (type === 0) v = cur;
+        else if (type === 1) v = (cur - a) & 0xff;
+        else if (type === 2) v = (cur - b) & 0xff;
+        else if (type === 3) v = (cur - ((a + b) >> 1)) & 0xff;
+        else v = (cur - pngPaeth(a, b, c)) & 0xff;
+        tmp[x] = v;
+        score += v < 128 ? v : 256 - v;
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        bestType = type;
+        best.set(tmp);
+      }
+    }
+    out[y * (stride + 1)] = bestType;
+    out.set(best, y * (stride + 1) + 1);
+  }
+  return out;
+};
+
+const pngU32 = (v) => [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255];
+const pngU16 = (v) => [(v >>> 8) & 255, v & 255];
+
+const pngChunk = (type, data) => {
+  const body = new Uint8Array(4 + data.length);
+  body[0] = type.charCodeAt(0);
+  body[1] = type.charCodeAt(1);
+  body[2] = type.charCodeAt(2);
+  body[3] = type.charCodeAt(3);
+  body.set(data, 4);
+  const crc = crc32(body);
+  const out = new Uint8Array(4 + body.length + 4);
+  out.set(pngU32(data.length), 0);
+  out.set(body, 4);
+  out.set(pngU32(crc), 4 + body.length);
+  return out;
+};
+
+const B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const bytesToBase64 = (bytes) => {
+  let out = "";
+  let i = 0;
+  for (; i + 2 < bytes.length; i += 3) {
+    const n = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
+    out += B64_CHARS[(n >> 18) & 63] + B64_CHARS[(n >> 12) & 63] + B64_CHARS[(n >> 6) & 63] + B64_CHARS[n & 63];
+  }
+  const rem = bytes.length - i;
+  if (rem === 1) {
+    const n = bytes[i] << 16;
+    out += B64_CHARS[(n >> 18) & 63] + B64_CHARS[(n >> 12) & 63] + "==";
+  } else if (rem === 2) {
+    const n = (bytes[i] << 16) | (bytes[i + 1] << 8);
+    out += B64_CHARS[(n >> 18) & 63] + B64_CHARS[(n >> 12) & 63] + B64_CHARS[(n >> 6) & 63] + "=";
+  }
+  return out;
+};
+
+// Assemble RGBA frames into one APNG and return it as an <Image>-ready src.
+const encodeDoomApng = (frames, w, h, delayDen) => {
+  const parts = [];
+  parts.push(Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10])); // PNG signature
+
+  const ihdr = new Uint8Array(13);
+  ihdr.set(pngU32(w), 0);
+  ihdr.set(pngU32(h), 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // color type 6 = RGBA
+  parts.push(pngChunk("IHDR", ihdr));
+
+  const actl = new Uint8Array(8);
+  actl.set(pngU32(frames.length), 0); // num_frames
+  actl.set(pngU32(0), 4); // num_plays (0 = infinite)
+  parts.push(pngChunk("acTL", actl));
+
+  let seq = 0;
+  frames.forEach((rgba, idx) => {
+    const fctl = new Uint8Array(26);
+    fctl.set(pngU32(seq++), 0); // sequence_number
+    fctl.set(pngU32(w), 4);
+    fctl.set(pngU32(h), 8);
+    fctl.set(pngU32(0), 12); // x_offset
+    fctl.set(pngU32(0), 16); // y_offset
+    fctl.set(pngU16(1), 20); // delay_num
+    fctl.set(pngU16(delayDen), 22); // delay_den
+    fctl[24] = 0; // dispose_op: none
+    fctl[25] = 0; // blend_op: source
+    parts.push(pngChunk("fcTL", fctl));
+
+    const z = deflate(pngFilterImage(rgba, w, h));
+    if (idx === 0) {
+      parts.push(pngChunk("IDAT", z));
+    } else {
+      const fdat = new Uint8Array(4 + z.length);
+      fdat.set(pngU32(seq++), 0); // sequence_number
+      fdat.set(z, 4);
+      parts.push(pngChunk("fdAT", fdat));
+    }
+  });
+
+  parts.push(pngChunk("IEND", new Uint8Array(0)));
+
+  let total = 0;
+  parts.forEach((p) => (total += p.length));
+  const png = new Uint8Array(total);
+  let off = 0;
+  parts.forEach((p) => {
+    png.set(p, off);
+    off += p.length;
+  });
+
+  return {
+    src: `data:image/png;base64,${bytesToBase64(png)}`,
+    width: w * DOOM_APNG_SCALE,
+    height: h * DOOM_APNG_SCALE,
+    bytes: png.length,
+  };
+};
+
+// Downsample the live indexed framebuffer into one RGBA frame (alpha 255),
+// averaging a small source rectangle per destination pixel.
+const readDoomRgbaFrame = (targetW, targetH) => {
+  const out = new Uint8Array(targetW * targetH * 4);
+
+  // Preferred path: the demo runtime renders a full-color RGBA framebuffer, so
+  // we box-filter it down (averaging all 4 channels) for crisp anti-aliasing.
+  const doom = getDoomRuntime();
+  if (doom && typeof doom.getRgbaFramebuffer === "function") {
+    const src = doom.getRgbaFramebuffer();
+    const cellW = src.width / targetW;
+    const cellH = src.height / targetH;
+    for (let y = 0; y < targetH; y++) {
+      const sy0 = Math.floor(y * cellH);
+      const sy1 = Math.max(sy0 + 1, Math.floor((y + 1) * cellH));
+      for (let x = 0; x < targetW; x++) {
+        const sx0 = Math.floor(x * cellW);
+        const sx1 = Math.max(sx0 + 1, Math.floor((x + 1) * cellW));
+        let rT = 0;
+        let gT = 0;
+        let bT = 0;
+        let n = 0;
+        for (let sy = sy0; sy < sy1; sy++) {
+          const rowOff = sy * src.width * 4;
+          for (let sx = sx0; sx < sx1; sx++) {
+            const i = rowOff + sx * 4;
+            rT += src.data[i];
+            gT += src.data[i + 1];
+            bT += src.data[i + 2];
+            n++;
+          }
+        }
+        const o = (y * targetW + x) * 4;
+        out[o] = doomQuant(rT / n);
+        out[o + 1] = doomQuant(gT / n);
+        out[o + 2] = doomQuant(bT / n);
+        out[o + 3] = 255;
+      }
+    }
+    return out;
+  }
+
+  // Fallback: an external WASM port exposing an indexed framebuffer + palette.
+  const fb = readDoomFramebuffer();
+  if (!fb) {
+    for (let p = 0; p < targetW * targetH; p++) {
+      out[p * 4] = 8;
+      out[p * 4 + 1] = 10;
+      out[p * 4 + 2] = 12;
+      out[p * 4 + 3] = 255;
+    }
+    return out;
+  }
+  const cellW = fb.width / targetW;
+  const cellH = fb.height / targetH;
+  for (let y = 0; y < targetH; y++) {
+    const sy0 = Math.floor(y * cellH);
+    const sy1 = Math.max(sy0 + 1, Math.floor((y + 1) * cellH));
+    const syStep = Math.max(1, Math.floor((sy1 - sy0) / 3));
+    for (let x = 0; x < targetW; x++) {
+      const sx0 = Math.floor(x * cellW);
+      const sx1 = Math.max(sx0 + 1, Math.floor((x + 1) * cellW));
+      const sxStep = Math.max(1, Math.floor((sx1 - sx0) / 3));
+      let rTotal = 0;
+      let gTotal = 0;
+      let bTotal = 0;
+      let samples = 0;
+      for (let sy = sy0; sy < sy1; sy += syStep) {
+        const rowOff = sy * fb.width;
+        for (let sx = sx0; sx < sx1; sx += sxStep) {
+          const [r, g, b] = doomPaletteRgb(fb.data[rowOff + sx] || 0, fb.palette);
+          rTotal += r;
+          gTotal += g;
+          bTotal += b;
+          samples++;
+        }
+      }
+      const o = (y * targetW + x) * 4;
+      const denom = Math.max(1, samples);
+      out[o] = doomQuant(rTotal / denom);
+      out[o + 1] = doomQuant(gTotal / denom);
+      out[o + 2] = doomQuant(bTotal / denom);
+      out[o + 3] = 255;
+    }
+  }
+  return out;
+};
+
+// Tick the runtime DOOM_APNG_FRAMES times, snapshotting each frame, then bake
+// the loop into one APNG. `press`/`holdFrames` let an input hold keys for the
+// first few ticks so a button tap reads as a short, natural movement.
+const bakeDoomApngLoop = ({ press = null, holdFrames = 0 } = {}) => {
+  if (press) press.forEach((key) => sendDoomKey(key, true));
+  const frames = [];
+  for (let f = 0; f < DOOM_APNG_FRAMES; f++) {
+    if (press && f === holdFrames) press.forEach((key) => sendDoomKey(key, false));
+    advanceDoomRuntime();
+    frames.push(readDoomRgbaFrame(DOOM_APNG_W, DOOM_APNG_H));
+  }
+  if (press && holdFrames >= DOOM_APNG_FRAMES) press.forEach((key) => sendDoomKey(key, false));
+  return encodeDoomApng(frames, DOOM_APNG_W, DOOM_APNG_H, DOOM_APNG_DELAY_DEN);
+};
+
 const DoomerDemo = () => {
-  const [frameTick, setFrameTick] = useState(0);
   const [hp, setHp] = useState(100);
   const [armor, setArmor] = useState(60);
   const [ammo, setAmmo] = useState(50);
   const [commandInput, setCommandInput] = useState("");
   const [commandCursor, setCommandCursor] = useState(0);
   const [log, setLog] = useState(["Connected to Doom framebuffer bridge."]);
+  // One baked APNG loop — the browser animates its 12 frames natively, so there
+  // is no per-frame React work between bakes.
+  const [viewport, setViewport] = useState(() => bakeDoomApngLoop());
 
   const syncDoomStatus = (doom = getDoomRuntime()) => {
     if (!doom || typeof doom.getStatus !== "function") return;
@@ -2012,24 +2620,24 @@ const DoomerDemo = () => {
     }
   };
 
+  // Re-bake a fresh animated loop from the live framebuffer and swap the
+  // <Image> src. `press`/`holdFrames` let a button tap hold its keys for the
+  // first few of the 12 ticks so the motion reads as a short, natural step.
+  const rebake = (opts) => {
+    setViewport(bakeDoomApngLoop(opts));
+    syncDoomStatus();
+  };
+
   useEffect(() => {
-    syncDoomStatus(advanceDoomRuntime());
-    const id = setInterval(() => {
-      syncDoomStatus(advanceDoomRuntime());
-      setFrameTick((tick) => tick + 1);
-    }, 100);
+    syncDoomStatus();
+    // Low-frequency ambient refresh keeps idle motion (enemies, title pulse)
+    // advancing; the smooth 12 fps animation runs inside the APNG, not React.
+    const id = setInterval(() => rebake(), 1500);
     return () => clearInterval(id);
   }, []);
 
-  const frame = useMemo(
-    () => renderDoomFrame(frameTick),
-    [frameTick],
-  );
-
-  const tapInput = (keys, message) => {
-    tapDoomKeys(keys);
-    syncDoomStatus(advanceDoomRuntime());
-    setFrameTick((tick) => tick + 1);
+  const tapInput = (keys, message, holdFrames = 3) => {
+    rebake({ press: keys, holdFrames });
     if (message) setLog((l) => [message, ...l].slice(0, 6));
   };
 
@@ -2039,7 +2647,7 @@ const DoomerDemo = () => {
       return;
     }
     setAmmo((a) => Math.max(0, a - 1));
-    tapInput(["Control"], "CTRL fire event forwarded to Doom.");
+    tapInput(["Control"], "CTRL fire event forwarded to Doom.", 1);
   };
 
   const handleCommandInput = (value) => {
@@ -2069,8 +2677,7 @@ const DoomerDemo = () => {
   const reset = () => {
     const doom = getDoomRuntime();
     if (doom && typeof doom.reset === "function") doom.reset();
-    syncDoomStatus(doom);
-    setFrameTick((tick) => tick + 1);
+    rebake();
     setHp(100);
     setArmor(60);
     setAmmo(50);
@@ -2082,10 +2689,6 @@ const DoomerDemo = () => {
     `   AMMO ${String(ammo).padStart(2, " ")}` +
     `   ARMOR ${doomBar(armor, 100, 10)} ${String(armor).padStart(3, " ")}`;
 
-  const viewportSvg = useMemo(
-    () => makeDoomPixelViewportSvg(),
-    [frameTick],
-  );
   const hudSvg = useMemo(
     () => makeDoomHudSvg(hudLine),
     [hudLine],
@@ -2096,25 +2699,27 @@ const DoomerDemo = () => {
       <Tile>
         <Flex direction="column" gap="flush">
           <Text format={{ fontWeight: "demibold" }}>
-            Pixel Doom — WASM framebuffer rendered as SVG
+            Pixel Doom — framebuffer baked to an animated PNG
           </Text>
           <Text variant="microcopy">
-            The Doom WASM framebuffer is downsampled to {DOOM_PIXEL_VIEW_W}×
-            {DOOM_PIXEL_VIEW_H} with averaged palette colors, then emitted as
-            one crisp pixel-art SVG.
-            The HUD is a separate stable SVG so counters do not repaint on
-            every animation frame.
+            {DOOM_APNG_FRAMES} full-color {DOOM_APNG_W}×{DOOM_APNG_H} frames are
+            encoded — in pure JS — as one animated PNG (acTL / fcTL / fdAT) and
+            handed to a single &lt;Image&gt;. If the host supports APNG it
+            animates the loop natively; otherwise it degrades to a static first
+            frame. Motion with no iframe and no per-frame React repaint
+            ({(viewport.bytes / 1024).toFixed(1)} KB / loop). The HUD stays a
+            separate stable SVG so counters do not flicker.
           </Text>
         </Flex>
       </Tile>
 
-      {/* Viewport: one animated pixel SVG for the framebuffer; HUD is stable. */}
+      {/* Viewport: one baked APNG loop animated natively by the host <img>. */}
       <Tile>
         <Flex direction="column" gap="flush" align="start">
           <Image
-            src={viewportSvg.src}
-            width={viewportSvg.width}
-            height={viewportSvg.height}
+            src={viewport.src}
+            width={viewport.width}
+            height={viewport.height}
             alt="Pixel Doom viewport"
           />
           <Image
@@ -2180,25 +2785,26 @@ const DoomerDemo = () => {
       {/* Stage 2 hand-off notes */}
       <Tile>
         <Flex direction="column" gap="flush">
-          <Text format={{ fontWeight: "demibold" }}>Stage 2 WASM bridge</Text>
+          <Text format={{ fontWeight: "demibold" }}>How the APNG viewport works</Text>
           <Text variant="microcopy">
-            • renderDoomFrame() now reads a runtime Doom WASM framebuffer
-            (e.g. doom-wasm or chocolate-doom-wasm globals) and returns the
-            same {`{text, kind}`} row shape.
+            • bakeDoomApngLoop() ticks the runtime Doom framebuffer
+            (e.g. doom-wasm / chocolate-doom-wasm globals) {DOOM_APNG_FRAMES}×,
+            snapshotting each frame as downsampled RGBA.
           </Text>
           <Text variant="microcopy">
-            • The same framebuffer can be rendered as ASCII rows, but this
-            viewport uses palette colors directly as chunky SVG pixels for a
-            higher-quality Doom-like frame.
+            • Those frames are encoded — entirely in JS — into one animated PNG:
+            real DEFLATE (fixed-Huffman + greedy LZ77), adaptive scanline
+            filtering, CRC32/Adler32, acTL/fcTL/fdAT chunks, base64 data URI.
           </Text>
           <Text variant="microcopy">
             • The D-pad onClicks forward Doom keyboard events (W/A/S/D,
-            arrow keys, ctrl=fire) via the WASM port's input API.
+            arrow keys, ctrl=fire), held for the first few ticks of the next
+            bake so a tap reads as one short step.
           </Text>
           <Text variant="microcopy">
-            • The game loop is driven by a useEffect setInterval at 10 fps;
-            setFrameTick() retriggers the viewport SVG. The HUD is memoized
-            separately to prevent counter flicker.
+            • No per-frame React work: the host &lt;img&gt; animates the 12-frame
+            loop natively. A slow 1.5 s interval re-bakes for ambient motion;
+            inputs re-bake on demand. The HUD is a separate memoized SVG.
           </Text>
         </Flex>
       </Tile>
@@ -2705,19 +3311,19 @@ const Spinner = () => {
   },
   {
     id: "text-art-doom",
-    name: "Pixel Doom (SVG WASM framebuffer)",
+    name: "Pixel Doom (animated PNG)",
     description:
-      "A Doom WASM framebuffer rendered into a crisp pixel-art SVG image with a separate stable HUD SVG to prevent counter flicker. Indexed palette colors are rendered directly as chunky SVG pixels, and the D-pad forwards W/A/S/D, arrow, and ctrl/fire keyboard events to the WASM port.",
+      "A software-rendered Doom-style raycaster — textured brick/tech walls, a perspective-cast floor, distance fog, billboarded imps and dynamic muzzle-flash lighting — baked entirely in JS into one animated PNG (acTL/fcTL/fdAT) and handed to a single <Image>. The host <img> animates the loop natively (no iframe, no per-frame React work) and degrades to a static frame if APNG is unsupported. The D-pad re-bakes the loop, forwarding W/A/S/D, arrow, and ctrl/fire events to the framebuffer.",
     package: "text-art",
     Component: DoomerDemo,
     githubUrl: TEXT_ART_DOCS,
-    sourceCode: `// Per-frame: read the Doom WASM indexed-color framebuffer,
-// downsample/average palette colors, then compose crisp SVG pixel rects.
-const viewportSvg = makeDoomPixelViewportSvg();
+    sourceCode: `// Tick the framebuffer 12x, snapshot each as RGBA, then bake one
+// animated PNG (real DEFLATE + adaptive PNG filtering, all in JS).
+const viewport = bakeDoomApngLoop();      // -> { src: data:image/png;base64,..., width, height }
 const hudSvg = makeDoomHudSvg(hudLine);
 
 <Flex direction="column" gap="flush" align="start">
-  <Image src={viewportSvg.src} width={viewportSvg.width} height={viewportSvg.height} />
+  <Image src={viewport.src} width={viewport.width} height={viewport.height} />
   <Image src={hudSvg.src} width={hudSvg.width} height={hudSvg.height} />
 </Flex>`,
   },
