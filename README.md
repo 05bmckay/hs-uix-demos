@@ -6,7 +6,7 @@ Built on the HubSpot UI Extensions (`@hubspot/ui-extensions`) framework and depl
 
 ## What's inside
 
-The app's home page (`/app/pages/Home.jsx`) renders a `DemoBrowser` with one tab per package. Every tab shares one interaction model: its flagship demo renders inline at the top with the rest of the tab's demos in a tile grid below, and clicking a tile opens that demo full-page with a back button and prev/next paging scoped to the package.
+The app's home page (`/app/pages/Home.jsx`) renders a `DemoBrowser` with one tab per package. Every view shares one layout: a demo rendered inline with the rest of its package's demos in a tile grid below. Tabs lead with their flagship demo; clicking any tile opens that demo full-page with a back button and the same sibling grid underneath.
 
 | Tab | Component(s) | What it demonstrates |
 | --- | --- | --- |
@@ -88,7 +88,7 @@ export const DATATABLE_DEMOS = [
 ];
 ```
 
-`DemoBrowser` aggregates every package's array into `ALL_DEMOS` and renders one tab per entry in its `PACKAGES` registry (tab label + display order; the first demo in each package's array is its flagship hero). Tab content is structurally static by design: swapping the mounted demo in place inside the host `Tabs` component crashes the HubSpot renderer, so clicking a tile instead opens the demo full-page (Tabs unmount) with package-scoped navigation. Playground demos register their **Customize** drawer through `useCustomizePanel` in `playground.jsx`. The escape-hatch demos (`escape-hatch-demos.jsx`) have no tab of their own — they're merged into the Experimental tab's array.
+`DemoBrowser` aggregates every package's array into `ALL_DEMOS` and renders one tab per entry in its `PACKAGES` registry (tab label + display order; the first demo in each package's array is its flagship hero). Tab content is structurally static by design: swapping the mounted demo in place inside the host `Tabs` component crashes the HubSpot renderer, so clicking a tile instead opens the demo full-page (Tabs unmount) with a back button and the package's other demos in a grid below. Playground demos register their **Customize** drawer through `useCustomizePanel` in `playground.jsx`. The escape-hatch demos (`escape-hatch-demos.jsx`) have no tab of their own — they're merged into the Experimental tab's array.
 
 ## Configuration notes
 

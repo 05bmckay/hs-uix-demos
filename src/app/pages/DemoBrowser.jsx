@@ -69,10 +69,10 @@ const PACKAGES = [
 // Demo detail view — renders a demo with its action buttons.
 //
 // Inside a tab (hero) it gets only { demo, actions }. Full-page it also gets
-// onBack / onNavigate / prevDemo / nextDemo for package-scoped paging.
+// onBack.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const DemoDetail = ({ demo, actions, onBack, onNavigate, prevDemo, nextDemo }) => {
+const DemoDetail = ({ demo, actions, onBack }) => {
   const [headerSlot, setHeaderSlot] = useState(null);
   const registerHeaderSlot = useCallback((node) => setHeaderSlot(node), []);
 
@@ -80,8 +80,6 @@ const DemoDetail = ({ demo, actions, onBack, onNavigate, prevDemo, nextDemo }) =
     actions.copyTextToClipboard(demo.sourceCode);
     actions.addAlert({ type: "success", message: "Source code copied to clipboard." });
   };
-
-  const showNav = Boolean(onNavigate && (prevDemo || nextDemo));
 
   return (
     <Flex direction="column" gap="sm">
@@ -118,27 +116,6 @@ const DemoDetail = ({ demo, actions, onBack, onNavigate, prevDemo, nextDemo }) =
       <DemoHeaderContext.Provider value={registerHeaderSlot}>
         <demo.Component actions={actions} />
       </DemoHeaderContext.Provider>
-      {showNav && (
-        <>
-          <Divider />
-          <Flex
-            direction="row"
-            justify={prevDemo && nextDemo ? "between" : prevDemo ? "start" : "end"}
-            align="center"
-          >
-            {prevDemo && (
-              <Button variant="transparent" onClick={() => onNavigate(prevDemo.id)}>
-                {`< ${prevDemo.name}`}
-              </Button>
-            )}
-            {nextDemo && (
-              <Button variant="transparent" onClick={() => onNavigate(nextDemo.id)}>
-                {`${nextDemo.name} >`}
-              </Button>
-            )}
-          </Flex>
-        </>
-      )}
     </Flex>
   );
 };
@@ -166,16 +143,19 @@ const DemoGrid = ({ demos, onSelect }) => (
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Package tab — structurally static (see HOST CONSTRAINT above): the flagship
-// hero renders inline and never changes; tile clicks bubble up via onSelect
-// and open full-page.
+// Demo + siblings — the one layout used everywhere: a demo rendered inline
+// with the rest of its package's demos in a grid below. In a tab this shows
+// the flagship hero (structurally static — see HOST CONSTRAINT above; tile
+// clicks bubble up via onSelect and open full-page). Full-page it shows the
+// selected demo with a back button, and tile clicks swap the full-page demo.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const PackageTab = ({ demos, label, actions, onSelect }) => {
-  const [hero, ...others] = demos;
+const DemoWithSiblings = ({ demo, demos, label, actions, onSelect, onBack }) => {
+  const others = demos.filter((d) => d.id !== demo.id);
   return (
     <Flex direction="column" gap="sm">
-      <DemoDetail demo={hero} actions={actions} />
+      {/* key forces a clean remount per demo so header-slot / internal state don't leak across swaps */}
+      <DemoDetail key={demo.id} demo={demo} actions={actions} onBack={onBack} />
       {others.length > 0 && (
         <>
           <Divider />
@@ -190,7 +170,8 @@ const PackageTab = ({ demos, label, actions, onSelect }) => {
 // ═══════════════════════════════════════════════════════════════════════════
 // DemoBrowser — the main gallery component
 // One tab per PACKAGES entry; selecting a demo from any grid swaps the whole
-// browser for a full-page DemoDetail with back + package-scoped prev/next.
+// browser for a full-page DemoWithSiblings (back button + the package's other
+// demos in a grid below).
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const DemoBrowser = ({ actions }) => {
@@ -202,17 +183,15 @@ export const DemoBrowser = ({ actions }) => {
     : null;
 
   if (selected) {
-    const siblings = ALL_DEMOS.filter((d) => d.package === selected.package);
-    const index = siblings.findIndex((d) => d.id === selected.id);
+    const meta = PACKAGES.find((p) => p.id === selected.package);
     return (
-      <DemoDetail
-        key={selected.id}
+      <DemoWithSiblings
         demo={selected}
+        demos={ALL_DEMOS.filter((d) => d.package === selected.package)}
+        label={meta ? meta.label : selected.package}
         actions={actions}
+        onSelect={setSelectedDemoId}
         onBack={() => setSelectedDemoId(null)}
-        onNavigate={setSelectedDemoId}
-        prevDemo={siblings[index - 1] || null}
-        nextDemo={siblings[index + 1] || null}
       />
     );
   }
@@ -225,7 +204,8 @@ export const DemoBrowser = ({ actions }) => {
           if (demos.length === 0) return null;
           return (
             <Tab key={id} tabId={id} title={label}>
-              <PackageTab
+              <DemoWithSiblings
+                demo={demos[0]}
                 demos={demos}
                 label={label}
                 actions={actions}
