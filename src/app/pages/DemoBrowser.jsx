@@ -20,6 +20,7 @@ import { FEED_DEMOS } from "./feed-demos.jsx";
 import { FORM_DEMOS } from "./form-demos.jsx";
 import { ICON_DEMOS } from "./icon-demos.jsx";
 import { KANBAN_DEMOS } from "./kanban-demos.jsx";
+import { NEW_FEATURE_DEMOS } from "./new-feature-demos.jsx";
 import { TEXT_ART_DEMOS } from "./text-art/index.jsx";
 import { UTILS_DEMOS } from "./utils-demos.jsx";
 
@@ -31,6 +32,7 @@ const ALL_DEMOS = [
   ...FEED_DEMOS,
   ...CALENDAR_DEMOS,
   ...COMMON_COMPONENTS_DEMOS,
+  ...NEW_FEATURE_DEMOS,
   ...ICON_DEMOS,
   ...UTILS_DEMOS,
   ...TEXT_ART_DEMOS,
@@ -62,6 +64,7 @@ const PACKAGES = [
   { id: "feed", label: "Feed" },
   { id: "calendar", label: "Calendar" },
   { id: "common", label: "Common Components" },
+  { id: "new", label: "New Features" },
   { id: "utils", label: "Utils" },
   { id: "text-art", label: "Text Art" },
   { id: "experimental", label: "Experimental" },

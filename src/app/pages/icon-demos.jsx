@@ -337,17 +337,20 @@ const ClickableIconTestBed = () => {
           </Link>
         </Row>
 
-        <Row label="HubSpot Button with hs-uix Icon custom Down child" countKey="button-custom">
+        <Row label="HubSpot Button with native Icon child" countKey="button-custom">
           <Button variant="transparent" size="sm" onClick={() => bump("button-custom")}>
-            <Icon name="Down" size="md" screenReaderText="Button custom Down" />
+            <HubSpotIcon name="downCarat" size="sm" screenReaderText="Button native downCarat" />
           </Button>
+          <Text variant="microcopy">
+            Custom hs-uix icons render through Image, so they belong in Link or standalone rows, not inside Button.
+          </Text>
         </Row>
 
-        <Row label="HubSpot ButtonRow with custom icon action" countKey="buttonrow-custom">
+        <Row label="HubSpot ButtonRow with native icon action" countKey="buttonrow-custom">
           <ButtonRow dropDownButtonOptions={{ text: "More", size: "sm", variant: "transparent" }}>
             <Button variant="transparent" size="sm" onClick={() => bump("buttonrow-custom")}>
-              <Icon name="Down" size="md" screenReaderText="ButtonRow custom Down" />
-              Custom Down
+              <HubSpotIcon name="downCarat" size="sm" screenReaderText="ButtonRow native downCarat" />
+              Native Down
             </Button>
             <Button variant="transparent" size="sm" onClick={() => bump("buttonrow-native")}>
               <HubSpotIcon name="downCarat" size="sm" screenReaderText="ButtonRow native downCarat" />
