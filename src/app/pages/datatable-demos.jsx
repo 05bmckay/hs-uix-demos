@@ -22,6 +22,7 @@ import {
   formatCurrency,
   formatTime,
   formatDateTime,
+  GITHUB_BASE_URL,
 } from "./data.jsx";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1210,7 +1211,7 @@ export const CustomFilterDemo = () => (
 
 const dtNotify = (actions, message, type = "success") => actions?.addAlert?.({ type, message });
 
-const DT_GITHUB = "https://github.com/05bmckay/hs-uix/tree/main/packages/datatable";
+const DT_GITHUB = `${GITHUB_BASE_URL}/datatable`;
 
 const FEATURE_COLUMNS = [
   { field: "name", label: "Account", sortable: true },
@@ -1408,7 +1409,7 @@ export const DATATABLE_DEMOS = [
     description: "Storybook-style table preview with presets, a pull-out customization drawer, and live component controls.",
     package: "datatable",
     Component: DataTablePlaygroundDemo,
-    githubUrl: "https://github.com/05bmckay/hs-uix/tree/main/packages/datatable",
+    githubUrl: DT_GITHUB,
     sourceCode: `// Interactive Table Playground
 // Presets + a drawer-backed control surface for live DataTable configuration.
 // Package: hs-uix/datatable

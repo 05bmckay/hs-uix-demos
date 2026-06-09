@@ -20,7 +20,7 @@ import { FEED_DEMOS } from "./feed-demos.jsx";
 import { FORM_DEMOS } from "./form-demos.jsx";
 import { ICON_DEMOS } from "./icon-demos.jsx";
 import { KANBAN_DEMOS } from "./kanban-demos.jsx";
-import { TEXT_ART_DEMOS } from "./text-art-demos.jsx";
+import { TEXT_ART_DEMOS } from "./text-art/index.jsx";
 import { UTILS_DEMOS } from "./utils-demos.jsx";
 
 const ALL_DEMOS = [

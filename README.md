@@ -65,6 +65,7 @@ hs-uix-demos/
             ├── playground.jsx   # Shared header-slot context + useCustomizePanel drawer scaffold
             ├── data.jsx         # Shared sample CRM-like data + formatters
             ├── *-demos.jsx      # One file per package, each exporting an *_DEMOS array
+            ├── text-art/        # Text Art demos, split per demo (index.jsx exports TEXT_ART_DEMOS)
             └── package.json     # Page bundle deps (hs-uix, @hubspot/ui-extensions)
 ```
 

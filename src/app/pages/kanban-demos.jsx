@@ -14,6 +14,7 @@ import { Kanban, KanbanCardActions } from "hs-uix/kanban";
 import { AvatarStack } from "hs-uix/common-components";
 import { formatCurrencyCompact } from "hs-uix/utils";
 import { useCustomizePanel } from "./playground.jsx";
+import { GITHUB_BASE_URL } from "./data.jsx";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Shared sample data
@@ -888,7 +889,7 @@ const KanbanPlaygroundDemo = ({ actions: alertActions }) => {
 // Isolated feature demos — one focused card per capability
 // ═══════════════════════════════════════════════════════════════════════════
 
-const KN_GITHUB = "https://github.com/05bmckay/hs-uix/tree/main/packages/kanban";
+const KN_GITHUB = `${GITHUB_BASE_URL}/kanban`;
 const knNotify = (actions, message, type = "success") => actions?.addAlert?.({ type, message });
 
 const KN_DEALS = [
