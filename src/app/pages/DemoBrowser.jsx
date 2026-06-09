@@ -40,10 +40,10 @@ const ALL_DEMOS = [
 // ═══════════════════════════════════════════════════════════════════════════
 // Package registry — one entry per tab, in display order.
 //
-// layout: "playground" — the first demo is a flagship playground, rendered
-//         inline with a grid of the remaining demos below it.
-//         "grid"       — all demos start as a tile grid; selecting one shows
-//         it inline with back / prev / next navigation scoped to the package.
+// layout: "playground" — the first demo is a flagship playground and starts
+//         selected, rendered inline with the remaining demos in a grid below.
+//         "grid"       — the tab opens on the tile grid; selecting a demo
+//         renders it inline the same way.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const PACKAGES = [
@@ -60,20 +60,14 @@ const PACKAGES = [
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Demo detail view — renders the selected demo with action buttons
-// Includes prev/next navigation to page through demos in the same package.
+// Demo detail view — renders the selected demo with action buttons.
+//
+// Always renders inline inside its tab. (An earlier revision added a back
+// button and a prev/next footer here; rendering those inside <Tabs> crashed
+// the host renderer, so all paging happens through the demo grid instead.)
 // ═══════════════════════════════════════════════════════════════════════════
 
-const DemoDetail = ({
-  demo,
-  onBack,
-  onNavigate,
-  prevDemo,
-  nextDemo,
-  actions,
-  hideBack = false,
-  hideNavigation = false,
-}) => {
+const DemoDetail = ({ demo, actions }) => {
   const [headerSlot, setHeaderSlot] = useState(null);
   const registerHeaderSlot = useCallback((node) => setHeaderSlot(node), []);
 
@@ -84,11 +78,6 @@ const DemoDetail = ({
 
   return (
     <Flex direction="column" gap="sm">
-      {!hideBack && (
-        <Button variant="transparent" onClick={onBack}>
-          {'< Back to demos'}
-        </Button>
-      )}
       <Flex direction="row" gap="sm" align="center">
         <Box flex={3}>
           <Flex direction="column" gap="flush">
@@ -117,27 +106,6 @@ const DemoDetail = ({
       <DemoHeaderContext.Provider value={registerHeaderSlot}>
         <demo.Component actions={actions} />
       </DemoHeaderContext.Provider>
-      {!hideNavigation && (
-        <>
-          <Divider />
-          <Flex direction="row" justify="between" align="center">
-            {prevDemo ? (
-              <Button variant="transparent" onClick={() => onNavigate(prevDemo.id)}>
-                {`< ${prevDemo.name}`}
-              </Button>
-            ) : (
-              <Flex />
-            )}
-            {nextDemo ? (
-              <Button variant="transparent" onClick={() => onNavigate(nextDemo.id)}>
-                {`${nextDemo.name} >`}
-              </Button>
-            ) : (
-              <Flex />
-            )}
-          </Flex>
-        </>
-      )}
     </Flex>
   );
 };
@@ -165,59 +133,36 @@ const DemoGrid = ({ demos, onSelect }) => (
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Package tab — one interaction model per layout, tabs always stay visible:
-//
-// "playground": the flagship demo renders inline, with the remaining demos in
-// a grid below; picking one swaps it into the inline slot.
-//
-// "grid": the tile grid renders first; picking a demo shows it inline with a
-// back-to-grid button and prev/next paging scoped to this package.
+// Package tab — one interaction model everywhere, tabs always stay visible:
+// the selected demo renders inline with the remaining demos in a grid below,
+// and picking one swaps it into the inline slot. The layout flag only decides
+// whether the first demo starts selected ("playground" tabs lead with their
+// flagship) or the tab opens on the grid ("grid" tabs).
 // ═══════════════════════════════════════════════════════════════════════════
 
 const PackageTab = ({ demos, label, layout, actions }) => {
-  const isPlayground = layout === "playground";
-  const [activeId, setActiveId] = useState(isPlayground ? demos[0]?.id : null);
-
-  const activeIndex = demos.findIndex((d) => d.id === activeId);
-  const active = activeIndex >= 0 ? demos[activeIndex] : null;
+  const [activeId, setActiveId] = useState(
+    layout === "playground" ? demos[0]?.id : null
+  );
+  const active = demos.find((d) => d.id === activeId) || null;
 
   if (!active) {
     return <DemoGrid demos={demos} onSelect={setActiveId} />;
   }
 
-  if (isPlayground) {
-    const others = demos.filter((d) => d.id !== active.id);
-    return (
-      <Flex direction="column" gap="sm">
-        {/* key forces a clean remount per demo so header-slot / internal state don't leak across swaps */}
-        <DemoDetail
-          key={active.id}
-          demo={active}
-          actions={actions}
-          hideBack={true}
-          hideNavigation={true}
-        />
-        {others.length > 0 && (
-          <>
-            <Divider />
-            <Text format={{ fontWeight: "demibold" }}>{`More ${label} examples`}</Text>
-            <DemoGrid demos={others} onSelect={setActiveId} />
-          </>
-        )}
-      </Flex>
-    );
-  }
-
+  const others = demos.filter((d) => d.id !== active.id);
   return (
-    <DemoDetail
-      key={active.id}
-      demo={active}
-      onBack={() => setActiveId(null)}
-      onNavigate={setActiveId}
-      prevDemo={demos[activeIndex - 1] || null}
-      nextDemo={demos[activeIndex + 1] || null}
-      actions={actions}
-    />
+    <Flex direction="column" gap="sm">
+      {/* key forces a clean remount per demo so header-slot / internal state don't leak across swaps */}
+      <DemoDetail key={active.id} demo={active} actions={actions} />
+      {others.length > 0 && (
+        <>
+          <Divider />
+          <Text format={{ fontWeight: "demibold" }}>{`More ${label} examples`}</Text>
+          <DemoGrid demos={others} onSelect={setActiveId} />
+        </>
+      )}
+    </Flex>
   );
 };
 
