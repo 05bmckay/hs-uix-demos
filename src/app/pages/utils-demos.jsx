@@ -12,9 +12,8 @@ import {
   Tile,
   ToggleGroup,
 } from "@hubspot/ui-extensions";
+import { AutoStatusTag, AutoTag } from "hs-uix/common-components";
 import {
-  AutoStatusTag,
-  AutoTag,
   buildOptions,
   findOptionLabel,
   formatCurrency,
@@ -25,7 +24,7 @@ import {
   getAutoStatusTagVariant,
   getAutoTagVariant,
   sumBy,
-} from "hs-uix";
+} from "hs-uix/utils";
 
 const UTILS_DOCS =
   "https://github.com/05bmckay/hs-uix/blob/main/src/utils/README.md";

@@ -6,17 +6,14 @@ import {
   Icon,
   MultiSelect,
   NumberInput,
-  Panel,
-  PanelBody,
-  PanelFooter,
   PanelSection,
   Select,
   Tag,
   Text,
   ToggleGroup,
 } from "@hubspot/ui-extensions";
-import { FormBuilder } from "hs-uix";
-import { useDemoHeaderSlot } from "./demoHeader.jsx";
+import { FormBuilder } from "hs-uix/form";
+import { useCustomizePanel } from "./playground.jsx";
 import {
   STATUS_OPTIONS,
   CATEGORY_OPTIONS,
@@ -658,9 +655,12 @@ export const FormBuilderPlaygroundDemo = ({ actions: alertActions }) => {
     }
   }, [addAlert]);
 
-  const controlsOverlay = useMemo(() => (
-    <Panel id="form-playground-controls" title="Customize form" width="sm">
-      <PanelBody>
+  useCustomizePanel({
+    id: "form-playground-controls",
+    title: "Customize form",
+    onReset: () => applyPreset(controls.presetId),
+    body: (
+      <>
         <PanelSection>
           <Flex direction="column" gap="sm">
             <Text>
@@ -778,16 +778,9 @@ export const FormBuilderPlaygroundDemo = ({ actions: alertActions }) => {
             />
           </Flex>
         </PanelSection>
-      </PanelBody>
-      <PanelFooter>
-        <Flex direction="row" justify="end">
-          <Button variant="secondary" onClick={() => applyPreset(controls.presetId)}>
-            Reset preset
-          </Button>
-        </Flex>
-      </PanelFooter>
-    </Panel>
-  ), [
+      </>
+    ),
+  }, [
     controls,
     applyPreset,
     updateControls,
@@ -799,14 +792,6 @@ export const FormBuilderPlaygroundDemo = ({ actions: alertActions }) => {
     validationValues,
     extrasValues,
   ]);
-
-  const customizeButton = useMemo(() => (
-    <Button variant="secondary" overlay={controlsOverlay}>
-      Customize
-    </Button>
-  ), [controlsOverlay]);
-
-  useDemoHeaderSlot(customizeButton);
 
   return (
     <Flex direction="column" gap="sm">
@@ -1114,20 +1099,23 @@ export const FORM_DEMOS = [
 // Package: hs-uix/form
 //
 // The "Customize" button is registered into the shared DemoDetail header slot
-// (see useDemoHeaderSlot in ./demoHeader.jsx) so it sits alongside View code /
+// (see useCustomizePanel in ./playground.jsx) so it sits alongside View code /
 // Copy code.
 
-import { Button, Flex, Panel, PanelBody, PanelSection, Select, Tag, ToggleGroup } from "@hubspot/ui-extensions";
+import { MultiSelect, PanelSection, Select, ToggleGroup } from "@hubspot/ui-extensions";
 import { FormBuilder } from "hs-uix/form";
-import { useDemoHeaderSlot } from "./demoHeader.jsx";
+import { useCustomizePanel } from "./playground.jsx";
 
 const [controls, setControls] = useState(createFormPlaygroundState("lead"));
 const [isDirty, setIsDirty] = useState(false);
 const [autoSaveStatus, setAutoSaveStatus] = useState(null);
 
-const controlsOverlay = useMemo(() => (
-  <Panel id="form-playground-controls" title="Customize form" width="sm">
-    <PanelBody>
+useCustomizePanel({
+  id: "form-playground-controls",
+  title: "Customize form",
+  onReset: () => applyPreset(controls.presetId),
+  body: (
+    <>
       <PanelSection>
         <Select label="Preset" value={controls.presetId} options={FORM_PLAYGROUND_PRESET_OPTIONS} onChange={applyPreset} />
       </PanelSection>
@@ -1140,14 +1128,9 @@ const controlsOverlay = useMemo(() => (
         <ToggleGroup toggleType="checkboxList" label="Validation" value={validationValues} options={FORM_PLAYGROUND_VALIDATION_OPTIONS} onChange={handleValidationChange} />
         <ToggleGroup toggleType="checkboxList" label="Extras"     value={extrasValues}     options={FORM_PLAYGROUND_EXTRAS_OPTIONS}     onChange={handleExtrasChange} />
       </PanelSection>
-    </PanelBody>
-  </Panel>
-), [controls, applyPreset, updateControls, handleFieldSetChange, handleBehaviorChange, handleValidationChange, handleExtrasChange, behaviorValues, validationValues, extrasValues]);
-
-useDemoHeaderSlot(useMemo(
-  () => <Button variant="secondary" overlay={controlsOverlay}>Customize</Button>,
-  [controlsOverlay],
-));
+    </>
+  ),
+}, [controls, applyPreset, updateControls, handleFieldSetChange, handleBehaviorChange, handleValidationChange, handleExtrasChange, behaviorValues, validationValues, extrasValues]);
 
 <FormBuilder
   fields={buildFormPlaygroundFields(controls)}

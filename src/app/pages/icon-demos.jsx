@@ -13,7 +13,7 @@ import {
   Tile,
   ToggleGroup,
 } from "@hubspot/ui-extensions";
-import { Icon, ICON_NAMES, makeIconDataUri } from "hs-uix";
+import { Icon, ICON_NAMES, makeIconDataUri } from "hs-uix/common-components";
 
 // ---------------------------------------------------------------------------
 // Icon demo — a superset of HubSpot's native <Icon>. The native component is

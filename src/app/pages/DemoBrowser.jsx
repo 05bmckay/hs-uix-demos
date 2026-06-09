@@ -10,9 +10,9 @@ import {
   Text,
   Tile,
 } from "@hubspot/ui-extensions";
-import { DemoHeaderContext } from "./demoHeader.jsx";
+import { DemoHeaderContext } from "./playground.jsx";
 import { CALENDAR_DEMOS } from "./calendar-demos.jsx";
-import { COMMON_COMPONENT_DEMOS } from "./common-components-demos.jsx";
+import { COMMON_COMPONENTS_DEMOS } from "./common-components-demos.jsx";
 import { CRM_SEARCH_DEMOS } from "./crm-search-demos.jsx";
 import { DATATABLE_DEMOS } from "./datatable-demos.jsx";
 import { EXPERIMENTAL_DEMOS } from "./experimental-demos.jsx";
@@ -30,25 +30,34 @@ const ALL_DEMOS = [
   ...CRM_SEARCH_DEMOS,
   ...FEED_DEMOS,
   ...CALENDAR_DEMOS,
-  ...COMMON_COMPONENT_DEMOS,
+  ...COMMON_COMPONENTS_DEMOS,
   ...ICON_DEMOS,
   ...UTILS_DEMOS,
   ...TEXT_ART_DEMOS,
   ...EXPERIMENTAL_DEMOS,
 ];
 
-const PACKAGE_META = {
-  datatable: { label: "DataTable", tabId: "datatable" },
-  form: { label: "FormBuilder", tabId: "form" },
-  kanban: { label: "Kanban", tabId: "kanban" },
-  "crm-search": { label: "CRM Search", tabId: "crm-search" },
-  feed: { label: "Feed", tabId: "feed" },
-  calendar: { label: "Calendar", tabId: "calendar" },
-  common: { label: "Common Components", tabId: "common" },
-  utils: { label: "Utils", tabId: "utils" },
-  "text-art": { label: "Text Art", tabId: "text-art" },
-  experimental: { label: "Experimental", tabId: "experimental" },
-};
+// ═══════════════════════════════════════════════════════════════════════════
+// Package registry — one entry per tab, in display order.
+//
+// layout: "playground" — the first demo is a flagship playground, rendered
+//         inline with a grid of the remaining demos below it.
+//         "grid"       — all demos start as a tile grid; selecting one shows
+//         it inline with back / prev / next navigation scoped to the package.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const PACKAGES = [
+  { id: "datatable", label: "DataTable", layout: "playground" },
+  { id: "form", label: "FormBuilder", layout: "playground" },
+  { id: "kanban", label: "Kanban", layout: "playground" },
+  { id: "crm-search", label: "CRM Search", layout: "playground" },
+  { id: "feed", label: "Feed", layout: "playground" },
+  { id: "calendar", label: "Calendar", layout: "playground" },
+  { id: "common", label: "Common Components", layout: "grid" },
+  { id: "utils", label: "Utils", layout: "grid" },
+  { id: "text-art", label: "Text Art", layout: "grid" },
+  { id: "experimental", label: "Experimental", layout: "grid" },
+];
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Demo detail view — renders the selected demo with action buttons
@@ -156,145 +165,87 @@ const DemoGrid = ({ demos, onSelect }) => (
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Package tab — flagship playground inline, plus a grid of isolated feature
-// demos below it (when the package has more than one demo).
+// Package tab — one interaction model per layout, tabs always stay visible:
+//
+// "playground": the flagship demo renders inline, with the remaining demos in
+// a grid below; picking one swaps it into the inline slot.
+//
+// "grid": the tile grid renders first; picking a demo shows it inline with a
+// back-to-grid button and prev/next paging scoped to this package.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const PackageTab = ({ demos, label, actions }) => {
-  const [activeId, setActiveId] = useState(demos[0]?.id);
-  const active = demos.find((d) => d.id === activeId) || demos[0];
-  const others = demos.filter((d) => d.id !== active.id);
+const PackageTab = ({ demos, label, layout, actions }) => {
+  const isPlayground = layout === "playground";
+  const [activeId, setActiveId] = useState(isPlayground ? demos[0]?.id : null);
+
+  const activeIndex = demos.findIndex((d) => d.id === activeId);
+  const active = activeIndex >= 0 ? demos[activeIndex] : null;
+
+  if (!active) {
+    return <DemoGrid demos={demos} onSelect={setActiveId} />;
+  }
+
+  if (isPlayground) {
+    const others = demos.filter((d) => d.id !== active.id);
+    return (
+      <Flex direction="column" gap="sm">
+        {/* key forces a clean remount per demo so header-slot / internal state don't leak across swaps */}
+        <DemoDetail
+          key={active.id}
+          demo={active}
+          actions={actions}
+          hideBack={true}
+          hideNavigation={true}
+        />
+        {others.length > 0 && (
+          <>
+            <Divider />
+            <Text format={{ fontWeight: "demibold" }}>{`More ${label} examples`}</Text>
+            <DemoGrid demos={others} onSelect={setActiveId} />
+          </>
+        )}
+      </Flex>
+    );
+  }
+
   return (
-    <Flex direction="column" gap="sm">
-      {/* key forces a clean remount per demo so header-slot / internal state don't leak across swaps */}
-      <DemoDetail
-        key={active.id}
-        demo={active}
-        onBack={() => { }}
-        onNavigate={() => { }}
-        prevDemo={null}
-        nextDemo={null}
-        actions={actions}
-        hideBack={true}
-        hideNavigation={true}
-      />
-      {others.length > 0 && (
-        <>
-          <Divider />
-          <Text format={{ fontWeight: "demibold" }}>{`More ${label} examples`}</Text>
-          <DemoGrid demos={others} onSelect={setActiveId} />
-        </>
-      )}
-    </Flex>
+    <DemoDetail
+      key={active.id}
+      demo={active}
+      onBack={() => setActiveId(null)}
+      onNavigate={setActiveId}
+      prevDemo={demos[activeIndex - 1] || null}
+      nextDemo={demos[activeIndex + 1] || null}
+      actions={actions}
+    />
   );
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DemoBrowser — the main gallery component
-// Tabs for each package, tile grid within, click-through to detail view.
+// One tab per PACKAGES entry; all selection state lives inside the tab.
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const DemoBrowser = ({ actions }) => {
-  const [selectedDemoId, setSelectedDemoId] = useState(null);
-  const [activeTab, setActiveTab] = useState("datatable");
-
-  if (selectedDemoId) {
-    const currentIndex = ALL_DEMOS.findIndex((d) => d.id === selectedDemoId);
-    const demo = ALL_DEMOS[currentIndex];
-    if (demo) {
-      const prevDemo = currentIndex > 0 ? ALL_DEMOS[currentIndex - 1] : null;
-      const nextDemo = currentIndex < ALL_DEMOS.length - 1 ? ALL_DEMOS[currentIndex + 1] : null;
-      return (
-        <DemoDetail
-          demo={demo}
-          onBack={() => setSelectedDemoId(null)}
-          onNavigate={setSelectedDemoId}
-          prevDemo={prevDemo}
-          nextDemo={nextDemo}
-          actions={actions}
-        />
-      );
-    }
-  }
-
-  const datatableDemos = ALL_DEMOS.filter((d) => d.package === "datatable");
-  const formDemos = ALL_DEMOS.filter((d) => d.package === "form");
-  const kanbanDemos = ALL_DEMOS.filter((d) => d.package === "kanban");
-  const crmSearchDemos = ALL_DEMOS.filter((d) => d.package === "crm-search");
-  const feedDemos = ALL_DEMOS.filter((d) => d.package === "feed");
-  const calendarDemos = ALL_DEMOS.filter((d) => d.package === "calendar");
-  const commonDemos = ALL_DEMOS.filter((d) => d.package === "common");
-  const utilsDemos = ALL_DEMOS.filter((d) => d.package === "utils");
-  const textArtDemos = ALL_DEMOS.filter((d) => d.package === "text-art");
-  const experimentalDemos = ALL_DEMOS.filter((d) => d.package === "experimental");
-  const datatableDemo = datatableDemos[0];
-  const formDemo = formDemos[0];
-  const kanbanDemo = kanbanDemos[0];
-  const crmSearchDemo = crmSearchDemos[0];
-  const feedDemo = feedDemos[0];
-  const calendarDemo = calendarDemos[0];
-
-  const handleSelect = (demoId) => {
-    const demo = ALL_DEMOS.find((d) => d.id === demoId);
-    if (demo) {
-      setActiveTab(PACKAGE_META[demo.package].tabId);
-    }
-    setSelectedDemoId(demoId);
-  };
+  const [activeTab, setActiveTab] = useState(PACKAGES[0].id);
 
   return (
     <Flex direction="column" gap="sm">
       <Tabs selected={activeTab} onSelectedChange={setActiveTab}>
-        <Tab tabId="datatable" title="DataTable">
-          {datatableDemo && (
-            <PackageTab demos={datatableDemos} label="DataTable" actions={actions} />
-          )}
-        </Tab>
-        <Tab tabId="form" title="FormBuilder">
-          {formDemo && (
-            <PackageTab demos={formDemos} label="FormBuilder" actions={actions} />
-          )}
-        </Tab>
-        <Tab tabId="kanban" title="Kanban">
-          {kanbanDemo && (
-            <PackageTab demos={kanbanDemos} label="Kanban" actions={actions} />
-          )}
-        </Tab>
-        <Tab tabId="crm-search" title="CRM Search">
-          {crmSearchDemo && (
-            <PackageTab demos={crmSearchDemos} label="CRM Search" actions={actions} />
-          )}
-        </Tab>
-        <Tab tabId="feed" title="Feed">
-          {feedDemo && (
-            <PackageTab demos={feedDemos} label="Feed" actions={actions} />
-          )}
-        </Tab>
-        <Tab tabId="calendar" title="Calendar">
-          {calendarDemo && (
-            <PackageTab demos={calendarDemos} label="Calendar" actions={actions} />
-          )}
-        </Tab>
-        <Tab tabId="common" title="Common Components">
-          <Flex direction="column" gap="xs">
-            <DemoGrid demos={commonDemos} onSelect={handleSelect} />
-          </Flex>
-        </Tab>
-        <Tab tabId="utils" title="Utils">
-          <Flex direction="column" gap="xs">
-            <DemoGrid demos={utilsDemos} onSelect={handleSelect} />
-          </Flex>
-        </Tab>
-        <Tab tabId="text-art" title="Text Art">
-          <Flex direction="column" gap="xs">
-            <DemoGrid demos={textArtDemos} onSelect={handleSelect} />
-          </Flex>
-        </Tab>
-        <Tab tabId="experimental" title="Experimental">
-          <Flex direction="column" gap="xs">
-            <DemoGrid demos={experimentalDemos} onSelect={handleSelect} />
-          </Flex>
-        </Tab>
+        {PACKAGES.map(({ id, label, layout }) => {
+          const demos = ALL_DEMOS.filter((d) => d.package === id);
+          if (demos.length === 0) return null;
+          return (
+            <Tab key={id} tabId={id} title={label}>
+              <PackageTab
+                demos={demos}
+                label={label}
+                layout={layout}
+                actions={actions}
+              />
+            </Tab>
+          );
+        })}
       </Tabs>
     </Flex>
   );

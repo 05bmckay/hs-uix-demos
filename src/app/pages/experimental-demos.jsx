@@ -1632,5 +1632,7 @@ export const EXPERIMENTAL_DEMOS = [
 const HeaderActions = createRemoteComponentInternal("HeaderActions");
 const PrimaryHeaderActionButton = createRemoteComponentInternal("PrimaryHeaderActionButton", { fragmentProps: ["overlay"] });`,
   },
+  // escape-hatch-demos.jsx has no tab of its own — its demos surface here,
+  // under the same "experimental" package.
   ...ESCAPE_HATCH_DEMOS,
 ];

@@ -12,11 +12,11 @@ import {
   AutoStatusTag,
   AutoTag,
   AvatarStack,
-  formatCurrency,
   KeyValueList,
   SectionHeader,
   StyledText,
-} from "hs-uix";
+} from "hs-uix/common-components";
+import { formatCurrency } from "hs-uix/utils";
 
 // ---------------------------------------------------------------------------
 // Shared sample data
@@ -493,7 +493,7 @@ const OverviewDemo = () => (
 // Demo registry
 // ---------------------------------------------------------------------------
 
-export const COMMON_COMPONENT_DEMOS = [
+export const COMMON_COMPONENTS_DEMOS = [
   {
     id: "common-overview",
     name: "Overview",

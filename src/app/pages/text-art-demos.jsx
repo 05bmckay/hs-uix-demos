@@ -16,7 +16,7 @@ import {
   Tile,
   ToggleGroup,
 } from "@hubspot/ui-extensions";
-import { StyledText } from "hs-uix";
+import { StyledText } from "hs-uix/common-components";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Text Art demos

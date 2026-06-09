@@ -4,9 +4,6 @@ import {
   Flex,
   MultiSelect,
   NumberInput,
-  Panel,
-  PanelBody,
-  PanelFooter,
   PanelSection,
   Select,
   StatusTag,
@@ -14,8 +11,8 @@ import {
   Text,
   ToggleGroup,
 } from "@hubspot/ui-extensions";
-import { DataTable } from "hs-uix";
-import { useDemoHeaderSlot } from "./demoHeader.jsx";
+import { DataTable } from "hs-uix/datatable";
+import { useCustomizePanel } from "./playground.jsx";
 import {
   SAMPLE_DATA,
   STATUS_COLORS,
@@ -637,9 +634,12 @@ export const DataTablePlaygroundDemo = () => {
     });
   }, [controls, updateControls]);
 
-  const controlsOverlay = useMemo(() => (
-    <Panel id="datatable-playground-controls" title="Customize table" width="sm">
-      <PanelBody>
+  useCustomizePanel({
+    id: "datatable-playground-controls",
+    title: "Customize table",
+    onReset: () => applyPreset(controls.presetId),
+    body: (
+      <>
         <PanelSection>
           <Flex direction="column" gap="sm">
             <Text>
@@ -753,16 +753,9 @@ export const DataTablePlaygroundDemo = () => {
             />
           </Flex>
         </PanelSection>
-      </PanelBody>
-      <PanelFooter>
-        <Flex direction="row" justify="end">
-          <Button variant="secondary" onClick={() => applyPreset(controls.presetId)}>
-            Reset preset
-          </Button>
-        </Flex>
-      </PanelFooter>
-    </Panel>
-  ), [
+      </>
+    ),
+  }, [
     controls,
     applyPreset,
     updateControls,
@@ -772,14 +765,6 @@ export const DataTablePlaygroundDemo = () => {
     featureValues,
     presentationValues,
   ]);
-
-  const customizeButton = useMemo(() => (
-    <Button variant="secondary" overlay={controlsOverlay}>
-      Customize
-    </Button>
-  ), [controlsOverlay]);
-
-  useDemoHeaderSlot(customizeButton);
 
   return (
     <Flex direction="column" gap="sm">
@@ -1429,38 +1414,30 @@ export const DATATABLE_DEMOS = [
 // Package: hs-uix/datatable
 //
 // The "Customize" button is registered into the shared DemoDetail header slot
-// (see useDemoHeaderSlot in ./demoHeader.jsx) so it sits alongside View code /
+// (see useCustomizePanel in ./playground.jsx) so it sits alongside View code /
 // Copy code. The demo body is just the live DataTable.
 
-import { Button, Flex, Panel, PanelBody, PanelFooter, PanelSection, Select } from "@hubspot/ui-extensions";
+import { PanelSection, Select } from "@hubspot/ui-extensions";
 import { DataTable } from "hs-uix/datatable";
-import { useDemoHeaderSlot } from "./demoHeader.jsx";
+import { useCustomizePanel } from "./playground.jsx";
 
 const [controls, setControls] = useState(createPlaygroundState("overview"));
 
-const controlsOverlay = useMemo(() => (
-  <Panel id="datatable-playground-controls" title="Customize table" width="sm">
-    <PanelBody>
+useCustomizePanel({
+  id: "datatable-playground-controls",
+  title: "Customize table",
+  onReset: () => applyPreset(controls.presetId),
+  body: (
+    <>
       <PanelSection>
         <Select label="Preset" value={controls.presetId} options={PLAYGROUND_PRESET_OPTIONS} onChange={applyPreset} />
       </PanelSection>
       <PanelSection>
         <Select label="Editing mode" value={controls.editing} options={PLAYGROUND_EDIT_MODE_OPTIONS} onChange={(value) => updateControls("editing", value)} />
       </PanelSection>
-    </PanelBody>
-    <PanelFooter>
-      <Flex direction="row" justify="end">
-        <Button variant="secondary" onClick={() => applyPreset(controls.presetId)}>Reset preset</Button>
-      </Flex>
-    </PanelFooter>
-  </Panel>
-), [controls, applyPreset, updateControls]);
-
-const customizeButton = useMemo(() => (
-  <Button variant="secondary" overlay={controlsOverlay}>Customize</Button>
-), [controlsOverlay]);
-
-useDemoHeaderSlot(customizeButton);
+    </>
+  ),
+}, [controls, applyPreset, updateControls]);
 
 <DataTable
   data={data}

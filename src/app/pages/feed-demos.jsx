@@ -1,19 +1,15 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
-  Button,
   Flex,
   Link,
   NumberInput,
-  Panel,
-  PanelBody,
-  PanelFooter,
   PanelSection,
   Select,
   Text,
   ToggleGroup,
 } from "@hubspot/ui-extensions";
-import { Feed } from "hs-uix";
-import { useDemoHeaderSlot } from "./demoHeader.jsx";
+import { Feed } from "hs-uix/feed";
+import { useCustomizePanel } from "./playground.jsx";
 
 const FEED_DOCS = "https://github.com/05bmckay/hs-uix/blob/main/packages/feed/README.md";
 
@@ -611,9 +607,13 @@ const FeedPlaygroundDemo = () => {
   const dataset = FEED_DATASETS[controls.dataset];
   const tabsOn = has("tabs") && Boolean(dataset.tabs);
 
-  const controlsOverlay = useMemo(() => (
-    <Panel id="feed-playground-controls" title="Customize feed" width="sm">
-      <PanelBody>
+  useCustomizePanel({
+    id: "feed-playground-controls",
+    title: "Customize feed",
+    onReset: () => setControls(createFeedPlaygroundState()),
+    resetLabel: "Reset",
+    body: (
+      <>
         <PanelSection>
           <Flex direction="column" gap="sm">
             <Text>
@@ -674,22 +674,9 @@ const FeedPlaygroundDemo = () => {
             />
           </Flex>
         </PanelSection>
-      </PanelBody>
-      <PanelFooter>
-        <Flex direction="row" justify="end">
-          <Button variant="secondary" onClick={() => setControls(createFeedPlaygroundState())}>
-            Reset
-          </Button>
-        </Flex>
-      </PanelFooter>
-    </Panel>
-  ), [controls, updateControls, toggleFeatures]);
-
-  const customizeButton = useMemo(
-    () => <Button variant="secondary" overlay={controlsOverlay}>Customize</Button>,
-    [controlsOverlay]
-  );
-  useDemoHeaderSlot(customizeButton);
+      </>
+    ),
+  }, [controls, updateControls, toggleFeatures]);
 
   return (
     // key remounts the feed when a prop the component reads only on mount

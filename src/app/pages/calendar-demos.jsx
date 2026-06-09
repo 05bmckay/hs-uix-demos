@@ -1,18 +1,14 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
-  Button,
   Flex,
   NumberInput,
-  Panel,
-  PanelBody,
-  PanelFooter,
   PanelSection,
   Select,
   Text,
   ToggleGroup,
 } from "@hubspot/ui-extensions";
-import { Calendar } from "hs-uix";
-import { useDemoHeaderSlot } from "./demoHeader.jsx";
+import { Calendar } from "hs-uix/calendar";
+import { useCustomizePanel } from "./playground.jsx";
 
 const CALENDAR_DOCS = "https://github.com/05bmckay/hs-uix/blob/main/packages/calendar/README.md";
 
@@ -228,9 +224,13 @@ const CalendarPlaygroundDemo = () => {
   const has = (feature) => controls.features.includes(feature);
   const dataset = CALENDAR_DATASETS[controls.dataset];
 
-  const controlsOverlay = useMemo(() => (
-    <Panel id="calendar-playground-controls" title="Customize calendar" width="sm">
-      <PanelBody>
+  useCustomizePanel({
+    id: "calendar-playground-controls",
+    title: "Customize calendar",
+    onReset: () => setControls(createCalendarPlaygroundState()),
+    resetLabel: "Reset",
+    body: (
+      <>
         <PanelSection>
           <Flex direction="column" gap="sm">
             <Text>
@@ -319,22 +319,9 @@ const CalendarPlaygroundDemo = () => {
             />
           </Flex>
         </PanelSection>
-      </PanelBody>
-      <PanelFooter>
-        <Flex direction="row" justify="end">
-          <Button variant="secondary" onClick={() => setControls(createCalendarPlaygroundState())}>
-            Reset
-          </Button>
-        </Flex>
-      </PanelFooter>
-    </Panel>
-  ), [controls, updateControls, toggleFeatures]);
-
-  const customizeButton = useMemo(
-    () => <Button variant="secondary" overlay={controlsOverlay}>Customize</Button>,
-    [controlsOverlay]
-  );
-  useDemoHeaderSlot(customizeButton);
+      </>
+    ),
+  }, [controls, updateControls, toggleFeatures]);
 
   return (
     // key forces a clean remount when dataset or default view changes so the

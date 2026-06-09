@@ -4,17 +4,16 @@ import {
   Flex,
   MultiSelect,
   NumberInput,
-  Panel,
-  PanelBody,
-  PanelFooter,
   PanelSection,
   Select,
   Tag,
   Text,
   ToggleGroup,
 } from "@hubspot/ui-extensions";
-import { AvatarStack, formatCurrencyCompact, Kanban, KanbanCardActions } from "hs-uix";
-import { useDemoHeaderSlot } from "./demoHeader.jsx";
+import { Kanban, KanbanCardActions } from "hs-uix/kanban";
+import { AvatarStack } from "hs-uix/common-components";
+import { formatCurrencyCompact } from "hs-uix/utils";
+import { useCustomizePanel } from "./playground.jsx";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Shared sample data
@@ -734,9 +733,12 @@ const KanbanPlaygroundDemo = ({ actions: alertActions }) => {
 
   // ---- Customize drawer ----------------------------------------------------
 
-  const controlsOverlay = useMemo(() => (
-    <Panel id="kanban-playground-controls" title="Customize kanban" width="sm">
-      <PanelBody>
+  useCustomizePanel({
+    id: "kanban-playground-controls",
+    title: "Customize kanban",
+    onReset: () => applyPreset(controls.presetId),
+    body: (
+      <>
         <PanelSection>
           <Flex direction="column" gap="sm">
             <Text>
@@ -864,16 +866,9 @@ const KanbanPlaygroundDemo = ({ actions: alertActions }) => {
             </Flex>
           </PanelSection>
         )}
-      </PanelBody>
-      <PanelFooter>
-        <Flex direction="row" justify="end">
-          <Button variant="secondary" onClick={() => applyPreset(controls.presetId)}>
-            Reset preset
-          </Button>
-        </Flex>
-      </PanelFooter>
-    </Panel>
-  ), [
+      </>
+    ),
+  }, [
     controls,
     collapsedStages,
     applyPreset,
@@ -881,14 +876,6 @@ const KanbanPlaygroundDemo = ({ actions: alertActions }) => {
     handleDividerChange,
     handleFeatureChange,
   ]);
-
-  const customizeButton = useMemo(() => (
-    <Button variant="secondary" overlay={controlsOverlay}>
-      Customize
-    </Button>
-  ), [controlsOverlay]);
-
-  useDemoHeaderSlot(customizeButton);
 
   return (
     <Flex direction="column" gap="sm">
@@ -1070,18 +1057,21 @@ export const KANBAN_DEMOS = [
 // Package: hs-uix/kanban
 //
 // The "Customize" button is registered into the shared DemoDetail header slot
-// (see useDemoHeaderSlot in ./demoHeader.jsx) so it sits alongside View code /
+// (see useCustomizePanel in ./playground.jsx) so it sits alongside View code /
 // Copy code. The demo body is just the live Kanban.
 
-import { Button, Flex, Panel, PanelBody, PanelFooter, PanelSection, Select, ToggleGroup } from "@hubspot/ui-extensions";
+import { PanelSection, Select, ToggleGroup } from "@hubspot/ui-extensions";
 import { Kanban, KanbanCardActions } from "hs-uix/kanban";
-import { useDemoHeaderSlot } from "./demoHeader.jsx";
+import { useCustomizePanel } from "./playground.jsx";
 
 const [controls, setControls] = useState(createKanbanPlaygroundState("lead-compact"));
 
-const controlsOverlay = useMemo(() => (
-  <Panel id="kanban-playground-controls" title="Customize kanban" width="sm">
-    <PanelBody>
+useCustomizePanel({
+  id: "kanban-playground-controls",
+  title: "Customize kanban",
+  onReset: () => applyPreset(controls.presetId),
+  body: (
+    <>
       <PanelSection>
         <Select label="Preset" value={controls.presetId} options={KANBAN_PRESET_OPTIONS} onChange={applyPreset} />
       </PanelSection>
@@ -1092,17 +1082,9 @@ const controlsOverlay = useMemo(() => (
       <PanelSection>
         <ToggleGroup toggleType="checkboxList" label="Features" value={controls.features} options={FEATURE_OPTIONS} onChange={handleFeatureChange} />
       </PanelSection>
-    </PanelBody>
-    <PanelFooter>
-      <Button variant="secondary" onClick={() => applyPreset(controls.presetId)}>Reset preset</Button>
-    </PanelFooter>
-  </Panel>
-), [controls, applyPreset, updateControls, handleDividerChange, handleFeatureChange]);
-
-useDemoHeaderSlot(useMemo(
-  () => <Button variant="secondary" overlay={controlsOverlay}>Customize</Button>,
-  [controlsOverlay],
-));
+    </>
+  ),
+}, [controls, applyPreset, updateControls, handleDividerChange, handleFeatureChange]);
 
 <Kanban {...buildKanbanProps(controls, data, meta, collapsedStages, ...)} />`,
   },
