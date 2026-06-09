@@ -47,9 +47,11 @@ const ALL_DEMOS = [
 // HOST CONSTRAINT: swapping the mounted demo in place inside <Tabs> crashes
 // the host renderer ("There was a problem displaying this content" + trace
 // id) — even when the replacement markup is identical to the hero's. Tab
-// content must therefore stay structurally static after mount; clicking a
-// tile opens the demo full-page (Tabs unmount), which is the long-proven
-// path. Don't reintroduce in-tab demo swapping.
+// content must therefore stay structurally static for the lifetime of a
+// Tabs mount. Demo selection works around this by remounting the entire
+// <Tabs> tree (key on Tabs) so the new panel content arrives via a fresh
+// mount — the same operation as the initial load. Don't reintroduce
+// in-place demo swapping inside a mounted Tabs.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const PACKAGES = [
@@ -144,10 +146,10 @@ const DemoGrid = ({ demos, onSelect }) => (
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Demo + siblings — the one layout used everywhere: a demo rendered inline
-// with the rest of its package's demos in a grid below. In a tab this shows
-// the flagship hero (structurally static — see HOST CONSTRAINT above; tile
-// clicks bubble up via onSelect and open full-page). Full-page it shows the
-// selected demo with a back button, and tile clicks swap the full-page demo.
+// with the rest of its package's demos in a grid below. By default the demo
+// is the package's flagship hero; when a demo is selected it takes the slot
+// and gains a back button. Tile clicks bubble up via onSelect, which
+// remounts the Tabs tree with the new selection (see HOST CONSTRAINT).
 // ═══════════════════════════════════════════════════════════════════════════
 
 const DemoWithSiblings = ({ demo, demos, label, actions, onSelect, onBack }) => {
@@ -169,9 +171,12 @@ const DemoWithSiblings = ({ demo, demos, label, actions, onSelect, onBack }) => 
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DemoBrowser — the main gallery component
-// One tab per PACKAGES entry; selecting a demo from any grid swaps the whole
-// browser for a full-page DemoWithSiblings (back button + the package's other
-// demos in a grid below).
+// One tab per PACKAGES entry. Selecting a demo renders it inside its own
+// tab's panel (replacing the hero) so the tab bar never disappears. The key
+// on <Tabs> remounts the whole tree on every selection change: in-place
+// panel swaps inside a mounted <Tabs> crash the host (see HOST CONSTRAINT
+// above), but a fresh Tabs mount with different panel content is the same
+// operation as the initial load, which is safe.
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const DemoBrowser = ({ actions }) => {
@@ -182,34 +187,34 @@ export const DemoBrowser = ({ actions }) => {
     ? ALL_DEMOS.find((d) => d.id === selectedDemoId)
     : null;
 
-  if (selected) {
-    const meta = PACKAGES.find((p) => p.id === selected.package);
-    return (
-      <DemoWithSiblings
-        demo={selected}
-        demos={ALL_DEMOS.filter((d) => d.package === selected.package)}
-        label={meta ? meta.label : selected.package}
-        actions={actions}
-        onSelect={setSelectedDemoId}
-        onBack={() => setSelectedDemoId(null)}
-      />
-    );
-  }
+  const handleSelect = (demoId) => {
+    const demo = ALL_DEMOS.find((d) => d.id === demoId);
+    if (demo) setActiveTab(demo.package);
+    setSelectedDemoId(demoId);
+  };
 
   return (
     <Flex direction="column" gap="sm">
-      <Tabs selected={activeTab} onSelectedChange={setActiveTab}>
+      <Tabs
+        key={selectedDemoId || "browse"}
+        selected={activeTab}
+        onSelectedChange={setActiveTab}
+      >
         {PACKAGES.map(({ id, label }) => {
           const demos = ALL_DEMOS.filter((d) => d.package === id);
           if (demos.length === 0) return null;
+          const isSelectedTab = selected ? selected.package === id : false;
           return (
             <Tab key={id} tabId={id} title={label}>
               <DemoWithSiblings
-                demo={demos[0]}
+                demo={isSelectedTab ? selected : demos[0]}
                 demos={demos}
                 label={label}
                 actions={actions}
-                onSelect={setSelectedDemoId}
+                onSelect={handleSelect}
+                onBack={
+                  isSelectedTab ? () => setSelectedDemoId(null) : undefined
+                }
               />
             </Tab>
           );

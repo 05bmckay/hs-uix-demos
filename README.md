@@ -6,7 +6,7 @@ Built on the HubSpot UI Extensions (`@hubspot/ui-extensions`) framework and depl
 
 ## What's inside
 
-The app's home page (`/app/pages/Home.jsx`) renders a `DemoBrowser` with one tab per package. Every view shares one layout: a demo rendered inline with the rest of its package's demos in a tile grid below. Tabs lead with their flagship demo; clicking any tile opens that demo full-page with a back button and the same sibling grid underneath.
+The app's home page (`/app/pages/Home.jsx`) renders a `DemoBrowser` with one tab per package. Every view shares one layout: a demo rendered inline with the rest of its package's demos in a tile grid below. Tabs lead with their flagship demo; clicking any tile swaps the selected demo into that tab's inline slot (with a back button), so the tab bar always stays visible.
 
 | Tab | Component(s) | What it demonstrates |
 | --- | --- | --- |
@@ -88,7 +88,7 @@ export const DATATABLE_DEMOS = [
 ];
 ```
 
-`DemoBrowser` aggregates every package's array into `ALL_DEMOS` and renders one tab per entry in its `PACKAGES` registry (tab label + display order; the first demo in each package's array is its flagship hero). Tab content is structurally static by design: swapping the mounted demo in place inside the host `Tabs` component crashes the HubSpot renderer, so clicking a tile instead opens the demo full-page (Tabs unmount) with a back button and the package's other demos in a grid below. Playground demos register their **Customize** drawer through `useCustomizePanel` in `playground.jsx`. The escape-hatch demos (`escape-hatch-demos.jsx`) have no tab of their own — they're merged into the Experimental tab's array.
+`DemoBrowser` aggregates every package's array into `ALL_DEMOS` and renders one tab per entry in its `PACKAGES` registry (tab label + display order; the first demo in each package's array is its flagship hero). Tab content is structurally static for the lifetime of a `Tabs` mount: swapping the mounted demo in place inside the host `Tabs` component crashes the HubSpot renderer, so demo selection instead remounts the entire `Tabs` tree (a `key` on `Tabs`) with the selected demo rendered in its tab's panel — a fresh mount, which the host handles fine. Playground demos register their **Customize** drawer through `useCustomizePanel` in `playground.jsx`. The escape-hatch demos (`escape-hatch-demos.jsx`) have no tab of their own — they're merged into the Experimental tab's array.
 
 ## Configuration notes
 
