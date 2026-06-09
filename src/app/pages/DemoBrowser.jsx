@@ -40,34 +40,39 @@ const ALL_DEMOS = [
 // ═══════════════════════════════════════════════════════════════════════════
 // Package registry — one entry per tab, in display order.
 //
-// layout: "playground" — the first demo is a flagship playground and starts
-//         selected, rendered inline with the remaining demos in a grid below.
-//         "grid"       — the tab opens on the tile grid; selecting a demo
-//         renders it inline the same way.
+// Every tab renders the same way: its first demo inline as the flagship hero,
+// with the remaining demos in a tile grid below. Put each package's best
+// playground/demo first in its *_DEMOS array.
+//
+// HOST CONSTRAINT: swapping the mounted demo in place inside <Tabs> crashes
+// the host renderer ("There was a problem displaying this content" + trace
+// id) — even when the replacement markup is identical to the hero's. Tab
+// content must therefore stay structurally static after mount; clicking a
+// tile opens the demo full-page (Tabs unmount), which is the long-proven
+// path. Don't reintroduce in-tab demo swapping.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const PACKAGES = [
-  { id: "datatable", label: "DataTable", layout: "playground" },
-  { id: "form", label: "FormBuilder", layout: "playground" },
-  { id: "kanban", label: "Kanban", layout: "playground" },
-  { id: "crm-search", label: "CRM Search", layout: "playground" },
-  { id: "feed", label: "Feed", layout: "playground" },
-  { id: "calendar", label: "Calendar", layout: "playground" },
-  { id: "common", label: "Common Components", layout: "grid" },
-  { id: "utils", label: "Utils", layout: "grid" },
-  { id: "text-art", label: "Text Art", layout: "grid" },
-  { id: "experimental", label: "Experimental", layout: "grid" },
+  { id: "datatable", label: "DataTable" },
+  { id: "form", label: "FormBuilder" },
+  { id: "kanban", label: "Kanban" },
+  { id: "crm-search", label: "CRM Search" },
+  { id: "feed", label: "Feed" },
+  { id: "calendar", label: "Calendar" },
+  { id: "common", label: "Common Components" },
+  { id: "utils", label: "Utils" },
+  { id: "text-art", label: "Text Art" },
+  { id: "experimental", label: "Experimental" },
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Demo detail view — renders the selected demo with action buttons.
+// Demo detail view — renders a demo with its action buttons.
 //
-// Always renders inline inside its tab. (An earlier revision added a back
-// button and a prev/next footer here; rendering those inside <Tabs> crashed
-// the host renderer, so all paging happens through the demo grid instead.)
+// Inside a tab (hero) it gets only { demo, actions }. Full-page it also gets
+// onBack / onNavigate / prevDemo / nextDemo for package-scoped paging.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const DemoDetail = ({ demo, actions }) => {
+const DemoDetail = ({ demo, actions, onBack, onNavigate, prevDemo, nextDemo }) => {
   const [headerSlot, setHeaderSlot] = useState(null);
   const registerHeaderSlot = useCallback((node) => setHeaderSlot(node), []);
 
@@ -76,8 +81,15 @@ const DemoDetail = ({ demo, actions }) => {
     actions.addAlert({ type: "success", message: "Source code copied to clipboard." });
   };
 
+  const showNav = Boolean(onNavigate && (prevDemo || nextDemo));
+
   return (
     <Flex direction="column" gap="sm">
+      {onBack && (
+        <Button variant="transparent" onClick={onBack}>
+          {'< Back to demos'}
+        </Button>
+      )}
       <Flex direction="row" gap="sm" align="center">
         <Box flex={3}>
           <Flex direction="column" gap="flush">
@@ -106,6 +118,27 @@ const DemoDetail = ({ demo, actions }) => {
       <DemoHeaderContext.Provider value={registerHeaderSlot}>
         <demo.Component actions={actions} />
       </DemoHeaderContext.Provider>
+      {showNav && (
+        <>
+          <Divider />
+          <Flex
+            direction="row"
+            justify={prevDemo && nextDemo ? "between" : prevDemo ? "start" : "end"}
+            align="center"
+          >
+            {prevDemo && (
+              <Button variant="transparent" onClick={() => onNavigate(prevDemo.id)}>
+                {`< ${prevDemo.name}`}
+              </Button>
+            )}
+            {nextDemo && (
+              <Button variant="transparent" onClick={() => onNavigate(nextDemo.id)}>
+                {`${nextDemo.name} >`}
+              </Button>
+            )}
+          </Flex>
+        </>
+      )}
     </Flex>
   );
 };
@@ -133,33 +166,21 @@ const DemoGrid = ({ demos, onSelect }) => (
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Package tab — one interaction model everywhere, tabs always stay visible:
-// the selected demo renders inline with the remaining demos in a grid below,
-// and picking one swaps it into the inline slot. The layout flag only decides
-// whether the first demo starts selected ("playground" tabs lead with their
-// flagship) or the tab opens on the grid ("grid" tabs).
+// Package tab — structurally static (see HOST CONSTRAINT above): the flagship
+// hero renders inline and never changes; tile clicks bubble up via onSelect
+// and open full-page.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const PackageTab = ({ demos, label, layout, actions }) => {
-  const [activeId, setActiveId] = useState(
-    layout === "playground" ? demos[0]?.id : null
-  );
-  const active = demos.find((d) => d.id === activeId) || null;
-
-  if (!active) {
-    return <DemoGrid demos={demos} onSelect={setActiveId} />;
-  }
-
-  const others = demos.filter((d) => d.id !== active.id);
+const PackageTab = ({ demos, label, actions, onSelect }) => {
+  const [hero, ...others] = demos;
   return (
     <Flex direction="column" gap="sm">
-      {/* key forces a clean remount per demo so header-slot / internal state don't leak across swaps */}
-      <DemoDetail key={active.id} demo={active} actions={actions} />
+      <DemoDetail demo={hero} actions={actions} />
       {others.length > 0 && (
         <>
           <Divider />
           <Text format={{ fontWeight: "demibold" }}>{`More ${label} examples`}</Text>
-          <DemoGrid demos={others} onSelect={setActiveId} />
+          <DemoGrid demos={others} onSelect={onSelect} />
         </>
       )}
     </Flex>
@@ -168,16 +189,38 @@ const PackageTab = ({ demos, label, layout, actions }) => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DemoBrowser — the main gallery component
-// One tab per PACKAGES entry; all selection state lives inside the tab.
+// One tab per PACKAGES entry; selecting a demo from any grid swaps the whole
+// browser for a full-page DemoDetail with back + package-scoped prev/next.
 // ═══════════════════════════════════════════════════════════════════════════
 
 export const DemoBrowser = ({ actions }) => {
   const [activeTab, setActiveTab] = useState(PACKAGES[0].id);
+  const [selectedDemoId, setSelectedDemoId] = useState(null);
+
+  const selected = selectedDemoId
+    ? ALL_DEMOS.find((d) => d.id === selectedDemoId)
+    : null;
+
+  if (selected) {
+    const siblings = ALL_DEMOS.filter((d) => d.package === selected.package);
+    const index = siblings.findIndex((d) => d.id === selected.id);
+    return (
+      <DemoDetail
+        key={selected.id}
+        demo={selected}
+        actions={actions}
+        onBack={() => setSelectedDemoId(null)}
+        onNavigate={setSelectedDemoId}
+        prevDemo={siblings[index - 1] || null}
+        nextDemo={siblings[index + 1] || null}
+      />
+    );
+  }
 
   return (
     <Flex direction="column" gap="sm">
       <Tabs selected={activeTab} onSelectedChange={setActiveTab}>
-        {PACKAGES.map(({ id, label, layout }) => {
+        {PACKAGES.map(({ id, label }) => {
           const demos = ALL_DEMOS.filter((d) => d.package === id);
           if (demos.length === 0) return null;
           return (
@@ -185,8 +228,8 @@ export const DemoBrowser = ({ actions }) => {
               <PackageTab
                 demos={demos}
                 label={label}
-                layout={layout}
                 actions={actions}
+                onSelect={setSelectedDemoId}
               />
             </Tab>
           );
